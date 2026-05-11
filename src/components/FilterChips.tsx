@@ -22,9 +22,18 @@ export function FilterChips({ presentClients, selected, onToggle }: Props) {
               onClick={() => onToggle(id)}
               type="button"
             >
-              <span className="chip-disc" style={{ background: style.color }}>
-                {clientInitial(style.displayName)}
-              </span>
+              {style.iconRaw ? (
+                <span
+                  className={`chip-disc chip-disc-icon chip-disc-${style.iconType}`}
+                  style={style.iconType === 'mono' ? { background: style.color } : undefined}
+                  aria-hidden="true"
+                  dangerouslySetInnerHTML={{ __html: style.iconRaw }}
+                />
+              ) : (
+                <span className="chip-disc" style={{ background: style.color }}>
+                  {clientInitial(style.displayName)}
+                </span>
+              )}
               <span className="chip-label">{style.displayName}</span>
             </button>
           )
