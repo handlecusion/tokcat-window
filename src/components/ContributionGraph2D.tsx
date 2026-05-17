@@ -2,7 +2,12 @@ import React from 'react'
 import type { GridLayout } from '../lib/grid'
 import { formatCost, formatMonthDay, humanizeTokens } from '../lib/format'
 
-export function ContributionGraph2D({ grid }: { grid: GridLayout }) {
+interface Props {
+  grid: GridLayout
+  colorRgb?: string
+}
+
+export function ContributionGraph2D({ grid, colorRgb = '37, 99, 235' }: Props) {
   const cellSize = 12
   const gap = 3
   const width = grid.cols * (cellSize + gap)
@@ -20,7 +25,7 @@ export function ContributionGraph2D({ grid }: { grid: GridLayout }) {
           if (c.active) {
             const t = Math.pow(c.tokens / max, 0.6)
             const op = 0.25 + t * 0.75
-            fill = `rgba(37, 99, 235, ${op.toFixed(3)})`
+            fill = `rgba(${colorRgb}, ${op.toFixed(3)})`
           }
           return (
             <rect key={i} x={x} y={y} width={cellSize} height={cellSize} rx={2} fill={fill}>

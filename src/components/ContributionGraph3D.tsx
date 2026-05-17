@@ -9,6 +9,9 @@ import { formatCost, formatMonthDay, humanizeTokens } from '../lib/format'
 
 interface Props {
   grid: GridLayout
+  activeLight?: string
+  activeDark?: string
+  accent?: string
 }
 
 const CELL = 1
@@ -20,8 +23,6 @@ const MAX_HEIGHT = 4.0
 // Per-face shading: top is lighter than sides for a stylized 3D tile look.
 const COLOR_INACTIVE_TOP = new THREE.Color('#ffffff')
 const COLOR_INACTIVE_SIDE = new THREE.Color('#eaedf2')
-const COLOR_ACTIVE_LIGHT = new THREE.Color('#bfdbfe')
-const COLOR_ACTIVE_DARK = new THREE.Color('#1e3a8a')
 
 function darken(c: THREE.Color, factor: number): THREE.Color {
   return new THREE.Color(c.r * factor, c.g * factor, c.b * factor)
@@ -57,7 +58,7 @@ function saveCam(s: CamState) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)) } catch {}
 }
 
-export function ContributionGraph3D({ grid }: Props) {
+export function ContributionGraph3D({ grid, activeLight = '#bfdbfe', activeDark = '#1e3a8a', accent = '#2563eb' }: Props) {
   const [hover, setHover] = useState<HoverInfo | null>(null)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
@@ -67,6 +68,9 @@ export function ContributionGraph3D({ grid }: Props) {
   const offsetX = -totalWidth / 2
   const offsetZ = -totalDepth / 2
   const max = Math.max(grid.maxTokens, 1)
+
+  const colorActiveLight = useMemo(() => new THREE.Color(activeLight), [activeLight])
+  const colorActiveDark = useMemo(() => new THREE.Color(activeDark), [activeDark])
 
   const cells = useMemo(() => {
     return grid.cells.map((c, i) => {
@@ -82,12 +86,12 @@ export function ContributionGraph3D({ grid }: Props) {
         height = BASE_HEIGHT + norm * MAX_HEIGHT
         isActive = true
         const t = Math.min(1, Math.max(0, Math.pow(c.tokens / max, 0.5)))
-        topColor = new THREE.Color().lerpColors(COLOR_ACTIVE_LIGHT, COLOR_ACTIVE_DARK, t)
+        topColor = new THREE.Color().lerpColors(colorActiveLight, colorActiveDark, t)
         sideColor = darken(topColor, 0.78)
       }
       return { c, i, x, z, height, isActive, topColor, sideColor }
     })
-  }, [grid, max, offsetX, offsetZ])
+  }, [grid, max, offsetX, offsetZ, colorActiveLight, colorActiveDark])
 
   // Initial camera placement
   const initialCam = useMemo<CamState>(() => {
@@ -303,9 +307,9 @@ export function ContributionGraph3D({ grid }: Props) {
         <button
           onClick={fitView}
           style={{
-            border: '1px solid #2563eb',
-            background: '#eff6ff',
-            color: '#1d4ed8',
+            border: `1px solid ${accent}`,
+            background: 'rgba(255,255,255,0.7)',
+            color: accent,
             borderRadius: 4,
             padding: '4px 10px',
             cursor: 'pointer',

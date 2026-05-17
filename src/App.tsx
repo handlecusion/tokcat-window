@@ -16,6 +16,17 @@ import { formatCost } from './lib/format'
 import { isTauri } from './lib/runtime'
 import { computeTrayTitle, loadSettings, saveSettings, Settings } from './lib/settings'
 import { checkForUpdatesSilent, checkForUpdatesInteractive } from './lib/updater'
+import { getTheme, THEMES, ThemeName } from './lib/themes'
+
+const THEME_KEY = 'tokcat:theme:v1'
+
+function loadTheme(): ThemeName {
+  try {
+    const raw = localStorage.getItem(THEME_KEY)
+    if (raw && THEMES.some(t => t.name === raw)) return raw as ThemeName
+  } catch {}
+  return 'Blue'
+}
 
 function defaultYear(): string {
   return String(new Date().getFullYear())
@@ -24,7 +35,12 @@ function defaultYear(): string {
 export default function App() {
   const [year, setYear] = useState<string>(defaultYear())
   const { payload, error } = useGraphStream(year)
-  const [theme, setTheme] = useState<string>('Blue')
+  const [theme, setTheme] = useState<ThemeName>(() => loadTheme())
+  const [isDark, setIsDark] = useState<boolean>(() =>
+    typeof window !== 'undefined' && window.matchMedia
+      ? window.matchMedia('(prefers-color-scheme: dark)').matches
+      : false
+  )
   const [view, setView] = useState<'2D' | '3D'>('3D')
   const [selected, setSelected] = useState<Set<string> | null>(null)
   const [settings, setSettings] = useState<Settings>(() => loadSettings())
@@ -63,6 +79,35 @@ export default function App() {
   useEffect(() => {
     saveSettings(settings)
   }, [settings])
+
+  useEffect(() => {
+    try { localStorage.setItem(THEME_KEY, theme) } catch {}
+  }, [theme])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const mql = window.matchMedia('(prefers-color-scheme: dark)')
+    const handler = (e: MediaQueryListEvent) => setIsDark(e.matches)
+    if (mql.addEventListener) mql.addEventListener('change', handler)
+    else mql.addListener(handler)
+    return () => {
+      if (mql.removeEventListener) mql.removeEventListener('change', handler)
+      else mql.removeListener(handler)
+    }
+  }, [])
+
+  const palette = useMemo(() => getTheme(theme), [theme])
+  const mode = isDark ? palette.dark : palette.light
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.style.setProperty('--blue', mode.accent)
+    root.style.setProperty('--blue-light', mode.accent)
+    root.style.setProperty('--blue-soft', mode.soft)
+    root.style.setProperty('--chip-bg-on', mode.chipBg)
+    root.style.setProperty('--chip-border-on', mode.chipBorder)
+    root.style.setProperty('--chip-color-on', mode.chipColor)
+  }, [mode.accent, mode.soft, mode.chipBg, mode.chipBorder, mode.chipColor])
 
   useEffect(() => {
     if (!isTauri()) return
@@ -218,9 +263,10 @@ export default function App() {
               years={allYears}
               onYearChange={setYear}
               theme={theme}
-              onThemeChange={setTheme}
+              onThemeChange={(t) => setTheme(t as ThemeName)}
               view={view}
               onViewChange={setView}
+              onRefresh={() => setRefreshTick(t => t + 1)}
               onOpenSettings={() => setSettingsOpen(true)}
             />
             <FilterChips presentClients={presentClients} selected={selected} onToggle={toggleClient} />
@@ -228,9 +274,14 @@ export default function App() {
               <div className="card-grid">
                 <div className="card-graph" key={view}>
                   {view === '3D' ? (
-                    <ContributionGraph3D grid={grid} />
+                    <ContributionGraph3D
+                      grid={grid}
+                      activeLight={palette.graphLight}
+                      activeDark={palette.graphDark}
+                      accent={mode.accent}
+                    />
                   ) : (
-                    <ContributionGraph2D grid={grid} />
+                    <ContributionGraph2D grid={grid} colorRgb={palette.graph2dRgb} />
                   )}
                 </div>
                 {view === '3D' && (

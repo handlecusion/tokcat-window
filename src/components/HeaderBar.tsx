@@ -1,5 +1,6 @@
 import React from 'react'
 import { humanizeTokens } from '../lib/format'
+import { THEMES } from '../lib/themes'
 
 interface Props {
   totalTokens: number
@@ -10,10 +11,11 @@ interface Props {
   onThemeChange: (t: string) => void
   view: '2D' | '3D'
   onViewChange: (v: '2D' | '3D') => void
+  onRefresh?: () => void
   onOpenSettings?: () => void
 }
 
-export function HeaderBar({ totalTokens, year, years, onYearChange, theme, onThemeChange, view, onViewChange, onOpenSettings }: Props) {
+export function HeaderBar({ totalTokens, year, years, onYearChange, theme, onThemeChange, view, onViewChange, onRefresh, onOpenSettings }: Props) {
   return (
     <div className="header-bar" data-tauri-drag-region>
       <div className="header-brand" data-tauri-drag-region>
@@ -30,12 +32,24 @@ export function HeaderBar({ totalTokens, year, years, onYearChange, theme, onThe
       </div>
       <div className="header-controls">
         <select className="theme-select" value={theme} onChange={e => onThemeChange(e.target.value)}>
-          <option value="Blue">Blue</option>
+          {THEMES.map(t => (
+            <option key={t.name} value={t.name}>{t.name}</option>
+          ))}
         </select>
         <div className="view-toggle">
           <button className={view === '2D' ? 'active' : ''} onClick={() => onViewChange('2D')}>2D</button>
           <button className={view === '3D' ? 'active' : ''} onClick={() => onViewChange('3D')}>3D</button>
         </div>
+        {onRefresh && (
+          <button className="settings-btn" onClick={onRefresh} aria-label="Refresh" title="Refresh">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="23 4 23 10 17 10" />
+              <polyline points="1 20 1 14 7 14" />
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+              <path d="M20.49 15A9 9 0 0 1 5.64 18.36L1 14" />
+            </svg>
+          </button>
+        )}
         {onOpenSettings && (
           <button className="settings-btn" onClick={onOpenSettings} aria-label="Settings">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
