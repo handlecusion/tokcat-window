@@ -3,17 +3,22 @@ use std::sync::Arc;
 use std::time::Duration;
 use tauri::{async_runtime, AppHandle, Runtime};
 
-include!(concat!(env!("OUT_DIR"), "/frames.rs"));
-
-fn static_icon() -> tauri::image::Image<'static> {
-    tauri::include_image!("icons/tray-icon.png")
+// The generated module exposes anim/anim_cat/anim_cat2 (Tauri Image) and the
+// _rgba/_LEN variants. We only consume the LEN constants here; the rgba bytes
+// are read by native_tray.rs, and the Image helpers are only needed on the
+// non-macOS fallback path below.
+mod frames {
+    #![allow(dead_code)]
+    include!(concat!(env!("OUT_DIR"), "/frames.rs"));
 }
+use frames::{ANIM_CAT2_LEN, ANIM_CAT_LEN, ANIM_LEN};
 
+#[cfg(not(target_os = "macos"))]
 fn frame(style: u32, idx: usize) -> tauri::image::Image<'static> {
     match style {
-        1 => anim_cat(idx),
-        2 => anim_cat2(idx),
-        _ => anim(idx),
+        1 => frames::anim_cat(idx),
+        2 => frames::anim_cat2(idx),
+        _ => frames::anim(idx),
     }
 }
 
@@ -25,57 +30,46 @@ fn frame_count(style: u32) -> usize {
     }
 }
 
-fn level_to_fps(level: u8) -> u64 {
-    match level {
-        0 => 0,
-        1 => 2,
-        2 => 3,
-        3 => 5,
-        _ => 8,
-    }
+/// RunCat-style adaptive frame interval. `load` is in [0.0, 100.0] (see
+/// `AppState::current_load`); formula `speed = max(1, load/5)` →
+/// `interval_ms = 500/speed` maps idle to 500ms (2 fps) and full load to
+/// 25ms (40 fps). CALayer-backed tray icon makes 40 fps essentially free.
+fn load_to_interval_ms(load: f32) -> u64 {
+    let speed = (load / 5.0).max(1.0);
+    (500.0 / speed) as u64
 }
 
-fn swap_tray_icon<R: Runtime>(app: &AppHandle<R>, image: tauri::image::Image<'static>) {
-    if let Some(tray) = app.tray_by_id("main-tray") {
-        let _ = tray.set_icon_with_as_template(Some(image), true);
+fn swap_tray_icon<R: Runtime>(app: &AppHandle<R>, style: u32, idx: usize) {
+    #[cfg(target_os = "macos")]
+    crate::native_tray::set_frame(app, style, idx);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let image = frame(style, idx);
+        if let Some(tray) = app.tray_by_id("main-tray") {
+            let _ = tray.set_icon_with_as_template(Some(image), true);
+        }
     }
 }
 
 pub fn spawn_animation_loop<R: Runtime>(app: AppHandle<R>, state: Arc<AppState>) {
     async_runtime::spawn(async move {
         let mut frame_idx: usize = 0;
-        let mut last_kind: u8 = 255;
         let mut last_style: u32 = u32::MAX;
         loop {
-            if !state.is_animate_enabled() {
-                if last_kind != 0 {
-                    swap_tray_icon(&app, static_icon());
-                    last_kind = 0;
-                }
-                tokio::time::sleep(Duration::from_millis(2000)).await;
-                continue;
-            }
             let style = state.animation_style();
             if style != last_style {
                 frame_idx = 0;
                 last_style = style;
-                last_kind = 255;
             }
-            let level = state.current_level();
-            let fps = level_to_fps(level);
-            if fps == 0 {
-                if last_kind != 1 {
-                    swap_tray_icon(&app, frame(style, 0));
-                    frame_idx = 0;
-                    last_kind = 1;
-                }
+            if !state.is_animate_enabled() {
+                swap_tray_icon(&app, style, 0);
                 tokio::time::sleep(Duration::from_millis(2000)).await;
                 continue;
             }
-            last_kind = 2;
-            swap_tray_icon(&app, frame(style, frame_idx));
+            let interval = load_to_interval_ms(state.current_load());
+            swap_tray_icon(&app, style, frame_idx);
             frame_idx = (frame_idx + 1) % frame_count(style);
-            tokio::time::sleep(Duration::from_millis(1000 / fps)).await;
+            tokio::time::sleep(Duration::from_millis(interval)).await;
         }
     });
 }
