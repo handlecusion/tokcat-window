@@ -90,7 +90,7 @@ html, body, #root {
 }
 
 .page {
-  padding: 14px 18px 10px;
+  padding: 14px 18px;
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -770,4 +770,89 @@ html, body, #root {
 }
 .settings-button.primary:hover:not(:disabled) {
   filter: brightness(1.05);
+}
+
+/* Live usage trace card */
+.trace-card {
+  margin-top: 10px;
+  background: var(--card-solid);
+  border: 0.5px solid var(--card-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: var(--card-shadow);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+.trace-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.trace-heading {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+.trace-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.trace-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 6px 0;
+}
+.trace-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.trace-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 80px auto;
+  gap: 8px;
+  align-items: center;
+}
+.trace-row-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.trace-client {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+.trace-agent {
+  font-size: 10px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trace-model {
+  font-size: 10px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trace-row-bar {
+  height: 6px;
+  background: var(--blue-soft);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.trace-bar-fill {
+  height: 100%;
+  background: var(--blue);
+  transition: width 200ms ease;
+}
+.trace-row-val {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--blue);
+  text-align: right;
 }

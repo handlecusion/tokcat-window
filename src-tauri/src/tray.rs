@@ -7,7 +7,7 @@ use tauri::{
 };
 
 const POPOVER_W: f64 = 640.0;
-const POPOVER_H: f64 = 527.0;
+const POPOVER_H: f64 = 620.0;
 
 pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Open Tokcat", true, None::<&str>)?;

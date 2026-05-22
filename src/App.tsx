@@ -15,6 +15,8 @@ import { buildGrid } from './lib/grid'
 import { formatCost } from './lib/format'
 import { isTauri } from './lib/runtime'
 import { computeTrayTitle, loadSettings, saveSettings, Settings } from './lib/settings'
+import { TraceBucket, RateUpdate } from './lib/usage'
+import { UsageTraceCard } from './components/UsageTraceCard'
 import { checkForUpdatesSilent, checkForUpdatesInteractive } from './lib/updater'
 import { getTheme, THEMES, ThemeName } from './lib/themes'
 
@@ -214,10 +216,40 @@ export default function App() {
     })
   }
 
-  // Push tray title whenever stats or trayMode changes (Tauri only).
+  // Live tokens-per-minute + per-(client, agent, model) breakdown, pushed
+  // by the backend's JSONL tailer every ~5s. No client-side diffing — the
+  // tailer parses only growth since the last poll, so values stay accurate
+  // even when the popover is closed and `stats` isn't refreshing.
+  const [tokensPerMin, setTokensPerMin] = useState<number | null>(null)
+  const [trace, setTrace] = useState<TraceBucket[]>([])
   useEffect(() => {
     if (!isTauri()) return
-    const title = computeTrayTitle(settings.trayMode, stats)
+    let unlisten: (() => void) | null = null
+    ;(async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        const { listen } = await import('@tauri-apps/api/event')
+        const initial = await invoke<number>('get_tokens_per_min')
+        setTokensPerMin(initial)
+        const initialTrace = await invoke<TraceBucket[]>('get_usage_trace', {
+          windowSecs: 600,
+        })
+        setTrace(initialTrace)
+        unlisten = await listen<RateUpdate>('rate-update', e => {
+          setTokensPerMin(e.payload.tokensPerMin)
+          setTrace(e.payload.trace)
+        })
+      } catch {}
+    })()
+    return () => {
+      if (unlisten) unlisten()
+    }
+  }, [])
+
+  // Push tray title whenever stats, trayMode, or the rate changes (Tauri only).
+  useEffect(() => {
+    if (!isTauri()) return
+    const title = computeTrayTitle(settings.trayMode, stats, tokensPerMin)
     ;(async () => {
       try {
         const { invoke } = await import('@tauri-apps/api/core')
@@ -226,7 +258,7 @@ export default function App() {
         // ignore
       }
     })()
-  }, [stats, settings.trayMode])
+  }, [stats, settings.trayMode, tokensPerMin])
 
   // Push animateTray flag to backend whenever it changes (Tauri only).
   useEffect(() => {
@@ -297,6 +329,7 @@ export default function App() {
                 </div>
               </div>
             </InnerCard>
+            <UsageTraceCard buckets={trace} windowSecs={600} />
           </>
         )}
       </Panel>

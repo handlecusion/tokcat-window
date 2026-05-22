@@ -1,16 +1,22 @@
 mod animation;
+#[cfg(target_os = "macos")]
+mod native_tray;
 mod state;
 mod tokscale;
 mod tray;
+mod usage_tail;
 
 use serde::Serialize;
 use state::{AppState, CacheEntry};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{async_runtime, Emitter, Manager};
+use usage_tail::TraceBucket;
 
 const REFRESH_SECS: u64 = 180;
 const ONESHOT_MAX_AGE_SECS: u64 = 30;
+const TAIL_TICK_SECS: u64 = 5;
+const RATE_EMIT_SECS: u64 = 180;
 
 #[derive(Clone, Serialize)]
 pub struct GraphPayload {
@@ -18,6 +24,13 @@ pub struct GraphPayload {
     #[serde(rename = "fetchedAt")]
     pub fetched_at: String,
     pub payload: serde_json::Value,
+}
+
+#[derive(Clone, Serialize)]
+pub struct RateUpdate {
+    #[serde(rename = "tokensPerMin")]
+    pub tokens_per_min: f32,
+    pub trace: Vec<TraceBucket>,
 }
 
 #[tauri::command]
@@ -100,12 +113,27 @@ fn set_animation_style(style: String, state: tauri::State<'_, Arc<AppState>>) {
     state.set_animation_style(code);
 }
 
+#[tauri::command]
+fn get_usage_trace(
+    window_secs: i64,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Vec<TraceBucket> {
+    state.usage_trace(window_secs)
+}
+
+#[tauri::command]
+fn get_tokens_per_min(state: tauri::State<'_, Arc<AppState>>) -> f32 {
+    state.tokens_per_min_estimate()
+}
+
 fn spawn_refresh_loop(app: tauri::AppHandle, state: Arc<AppState>) {
+    // The popover graph is still sourced from tokscale (years/contributions
+    // payload, cost calc, etc.). Animation no longer depends on this loop —
+    // usage_tail emits the rate signal at TAIL_TICK_SECS — so this is a
+    // steady 3-min refresh purely for the popover chart.
     async_runtime::spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(REFRESH_SECS));
-        tick.tick().await; // immediate first tick
         loop {
-            tick.tick().await;
+            tokio::time::sleep(Duration::from_secs(REFRESH_SECS)).await;
             let years = state.known_years();
             for year in years {
                 let s = state.clone();
@@ -124,6 +152,37 @@ fn spawn_refresh_loop(app: tauri::AppHandle, state: Arc<AppState>) {
                         let _ = tray::refresh_tray_title(&app, &payload, &window);
                     }
                 }
+            }
+        }
+    });
+}
+
+fn spawn_usage_tail_loop(app: tauri::AppHandle, state: Arc<AppState>) {
+    // 5s tick keeps the animation signal responsive; the emit cadence is
+    // separate so the tray title / trace UI shows the stable 10m average
+    // updated every 3 minutes.
+    async_runtime::spawn(async move {
+        // Emit immediately once the listener wires up, then settle into the
+        // 3-minute cadence. Without the immediate emit, the tray title
+        // depends on the initial `get_tokens_per_min` invoke racing the
+        // setup-time sync tick.
+        let payload = RateUpdate {
+            tokens_per_min: state.tokens_per_min_estimate(),
+            trace: state.usage_trace(600),
+        };
+        let _ = app.emit("rate-update", &payload);
+        let mut last_emit = std::time::Instant::now();
+        loop {
+            tokio::time::sleep(Duration::from_secs(TAIL_TICK_SECS)).await;
+            let s = state.clone();
+            let _ = async_runtime::spawn_blocking(move || s.tailer().tick()).await;
+            if last_emit.elapsed() >= Duration::from_secs(RATE_EMIT_SECS) {
+                last_emit = std::time::Instant::now();
+                let payload = RateUpdate {
+                    tokens_per_min: state.tokens_per_min_estimate(),
+                    trace: state.usage_trace(600),
+                };
+                let _ = app.emit("rate-update", &payload);
             }
         }
     });
@@ -152,6 +211,8 @@ pub fn run() {
             pop_dialog_shield,
             set_animate_tray,
             set_animation_style,
+            get_usage_trace,
+            get_tokens_per_min,
             tray::update_tray_title
         ]);
 
@@ -163,6 +224,10 @@ pub fn run() {
         }
         let handle = app.handle().clone();
         tray::setup(&handle)?;
+        #[cfg(target_os = "macos")]
+        if let Err(e) = native_tray::init() {
+            log::warn!("native_tray::init failed, falling back to Tauri set_icon: {}", e);
+        }
         // Standard menubar popover behavior: hide when the window loses focus
         // (e.g. user clicks another menubar app or anywhere outside Tokcat).
         // Skipped while a system dialog is in flight so an ask/message popup
@@ -179,7 +244,13 @@ pub fn run() {
                 }
             });
         }
+        // Prime the tailer synchronously so the first invoke from the
+        // frontend (and the initial tray title push) sees the real 10m
+        // average instead of zero. Cost: one directory walk + parse of any
+        // files modified in the last 6h; runs once at launch.
+        state_clone.tailer().tick();
         spawn_refresh_loop(handle.clone(), state_clone.clone());
+        spawn_usage_tail_loop(handle.clone(), state_clone.clone());
         animation::spawn_animation_loop(handle.clone(), state_clone.clone());
         Ok(())
     });

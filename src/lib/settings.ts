@@ -1,7 +1,13 @@
 import type { Stats } from './types'
 import { humanizeTokens, formatCost, isoDate } from './format'
 
-export type TrayMode = 'today_tokens' | 'today_cost' | 'total_tokens' | 'total_cost' | 'hidden'
+export type TrayMode =
+  | 'today_tokens'
+  | 'today_cost'
+  | 'total_tokens'
+  | 'total_cost'
+  | 'tokens_per_min'
+  | 'hidden'
 export type AnimationStyle = 'cube' | 'cat1' | 'cat2'
 
 export interface Settings {
@@ -50,10 +56,15 @@ export const TRAY_MODE_LABELS: Record<TrayMode, string> = {
   today_cost: "Today's cost ($5.20)",
   total_tokens: 'Total tokens (1.5B)',
   total_cost: 'Total cost ($889)',
+  tokens_per_min: 'Tokens / min (12.4K/m)',
   hidden: 'Icon only',
 }
 
-export function computeTrayTitle(mode: TrayMode, stats: Stats | null): string {
+export function computeTrayTitle(
+  mode: TrayMode,
+  stats: Stats | null,
+  tokensPerMin: number | null = null,
+): string {
   if (mode === 'hidden' || !stats) return ''
   const today = isoDate(new Date())
   const todayEntry = stats.perDayMap.get(today)
@@ -66,5 +77,8 @@ export function computeTrayTitle(mode: TrayMode, stats: Stats | null): string {
       return humanizeTokens(stats.totalTokens)
     case 'total_cost':
       return formatCost(stats.totalCost)
+    case 'tokens_per_min':
+      if (tokensPerMin === null) return '—/m'
+      return `${humanizeTokens(Math.max(0, Math.round(tokensPerMin)))}/m`
   }
 }

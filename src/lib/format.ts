@@ -2,7 +2,8 @@ export function humanizeTokens(n: number): string {
   if (n < 1000) return String(n)
   if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}K`
   if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  return `${(n / 1_000_000_000).toFixed(1)}B`
+  if (n < 1_000_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
+  return `${(n / 1_000_000_000_000).toFixed(1)}T`
 }
 
 export function formatCost(n: number): string {

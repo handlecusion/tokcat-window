@@ -129,7 +129,14 @@ export function SettingsPanel({ open, onClose, settings, onChange }: Props) {
 
   if (!open) return null
 
-  const modes: TrayMode[] = ['today_tokens', 'today_cost', 'total_tokens', 'total_cost', 'hidden']
+  const modes: TrayMode[] = [
+    'today_tokens',
+    'today_cost',
+    'total_tokens',
+    'total_cost',
+    'tokens_per_min',
+    'hidden',
+  ]
 
   return (
     <>
