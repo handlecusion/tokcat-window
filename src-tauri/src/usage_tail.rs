@@ -574,46 +574,32 @@ impl UsageTailer {
             .sum()
     }
 
+    /// Per-(client, agent, model) breakdown over `window_secs`. Frontend
+    /// decides whether to collapse rows by client based on the user's
+    /// "detailed trace" setting.
     pub fn trace(&self, window_secs: i64) -> Vec<TraceBucket> {
         let cutoff = now_ms() - window_secs * 1000;
         let events = self.events.lock();
-        // One row per client. agents (main, subagent:*) and model
-        // variants are joined into a single label so each CLI shows up
-        // exactly once in the trace card.
-        let mut groups: HashMap<String, (i64, u32, Vec<String>, Vec<String>)> = HashMap::new();
+        let mut groups: HashMap<(String, String, String), (i64, u32)> = HashMap::new();
         for e in events.iter() {
             if e.ts_ms < cutoff {
                 continue;
             }
-            let slot = groups
-                .entry(e.client.clone())
-                .or_insert_with(|| (0, 0, Vec::new(), Vec::new()));
+            let key = (e.client.clone(), e.agent.clone(), e.model.clone());
+            let slot = groups.entry(key).or_insert((0, 0));
             slot.0 += e.total();
             slot.1 += 1;
-            if !slot.2.iter().any(|a| a == &e.agent) {
-                slot.2.push(e.agent.clone());
-            }
-            if !slot.3.iter().any(|m| m == &e.model) {
-                slot.3.push(e.model.clone());
-            }
         }
         let window_min = (window_secs as f32 / 60.0).max(1.0 / 60.0);
         let mut out: Vec<TraceBucket> = groups
             .into_iter()
-            .map(|(client, (tokens, messages, mut agents, mut models))| {
-                agents.sort();
-                models.sort();
-                if models.len() > 1 {
-                    models.retain(|m| m != "unknown");
-                }
-                TraceBucket {
-                    client,
-                    agent: agents.join(", "),
-                    model: models.join(", "),
-                    tokens,
-                    messages,
-                    tokens_per_min: tokens as f32 / window_min,
-                }
+            .map(|((client, agent, model), (tokens, messages))| TraceBucket {
+                client,
+                agent,
+                model,
+                tokens,
+                messages,
+                tokens_per_min: tokens as f32 / window_min,
             })
             .collect();
         out.sort_by(|a, b| b.tokens.cmp(&a.tokens));

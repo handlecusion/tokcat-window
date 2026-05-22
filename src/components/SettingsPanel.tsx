@@ -219,6 +219,19 @@ export function SettingsPanel({ open, onClose, settings, onChange }: Props) {
           )}
 
           <section className="settings-section">
+            <div className="settings-label">Live trace</div>
+            <div className="settings-group">
+              <div className="settings-row">
+                <span className="settings-row-label">Split by agent / model</span>
+                <SwitchToggle
+                  checked={settings.detailedTrace}
+                  onChange={next => onChange({ ...settings, detailedTrace: next })}
+                />
+              </div>
+            </div>
+          </section>
+
+          <section className="settings-section">
             <div className="settings-label">About</div>
             <div className="settings-group">
               <div className="settings-row">

@@ -15,6 +15,9 @@ export interface Settings {
   autostart: boolean
   animateTray: boolean
   animationStyle: AnimationStyle
+  // When true, the Live trace card splits rows by (client, agent, model);
+  // otherwise rows collapse to one per client.
+  detailedTrace: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -22,6 +25,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autostart: false,
   animateTray: true,
   animationStyle: 'cat',
+  detailedTrace: false,
 }
 
 export const ANIMATION_STYLE_LABELS: Record<AnimationStyle, string> = {

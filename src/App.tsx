@@ -356,7 +356,7 @@ export default function App() {
                 </div>
               </div>
             </InnerCard>
-            <UsageTraceCard buckets={trace} windowSecs={600} />
+            <UsageTraceCard buckets={trace} windowSecs={600} detailed={settings.detailedTrace} />
           </>
         )}
       </Panel>
