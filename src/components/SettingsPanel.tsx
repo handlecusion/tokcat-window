@@ -199,7 +199,7 @@ export function SettingsPanel({ open, onClose, settings, onChange }: Props) {
                   />
                 </div>
                 {settings.animateTray &&
-                  (['cube', 'cat1', 'cat2'] as AnimationStyle[]).map(s => {
+                  (['cat', 'parrot'] as AnimationStyle[]).map(s => {
                     const active = settings.animationStyle === s
                     return (
                       <button

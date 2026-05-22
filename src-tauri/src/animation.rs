@@ -3,30 +3,29 @@ use std::sync::Arc;
 use std::time::Duration;
 use tauri::{async_runtime, AppHandle, Runtime};
 
-// The generated module exposes anim/anim_cat/anim_cat2 (Tauri Image) and the
-// _rgba/_LEN variants. We only consume the LEN constants here; the rgba bytes
-// are read by native_tray.rs, and the Image helpers are only needed on the
-// non-macOS fallback path below.
+// The generated module exposes anim_cat2/anim_parrot and their _LEN/_rgba
+// variants (light siblings are emitted for the eventual dark/light split
+// but unused today). We consume only LEN here; the rgba bytes are read by
+// native_tray.rs, and the Image helpers exist solely for the non-macOS
+// fallback path below.
 mod frames {
     #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/frames.rs"));
 }
-use frames::{ANIM_CAT2_LEN, ANIM_CAT_LEN, ANIM_LEN};
+use frames::{ANIM_CAT2_LEN, ANIM_PARROT_LEN};
 
 #[cfg(not(target_os = "macos"))]
 fn frame(style: u32, idx: usize) -> tauri::image::Image<'static> {
     match style {
-        1 => frames::anim_cat(idx),
-        2 => frames::anim_cat2(idx),
-        _ => frames::anim(idx),
+        1 => frames::anim_parrot(idx),
+        _ => frames::anim_cat2(idx),
     }
 }
 
 fn frame_count(style: u32) -> usize {
     match style {
-        1 => ANIM_CAT_LEN,
-        2 => ANIM_CAT2_LEN,
-        _ => ANIM_LEN,
+        1 => ANIM_PARROT_LEN,
+        _ => ANIM_CAT2_LEN,
     }
 }
 

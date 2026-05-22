@@ -8,7 +8,7 @@ export type TrayMode =
   | 'total_cost'
   | 'tokens_per_min'
   | 'hidden'
-export type AnimationStyle = 'cube' | 'cat1' | 'cat2'
+export type AnimationStyle = 'cat' | 'parrot'
 
 export interface Settings {
   trayMode: TrayMode
@@ -21,13 +21,12 @@ export const DEFAULT_SETTINGS: Settings = {
   trayMode: 'today_tokens',
   autostart: false,
   animateTray: true,
-  animationStyle: 'cat2',
+  animationStyle: 'cat',
 }
 
 export const ANIMATION_STYLE_LABELS: Record<AnimationStyle, string> = {
-  cube: 'Wireframe cube',
-  cat1: 'Spinning cat (long loop)',
-  cat2: 'Spinning cat (short loop)',
+  cat: 'Running cat',
+  parrot: 'Party parrot',
 }
 
 const KEY = 'tokcat:settings:v1'
@@ -37,8 +36,11 @@ export function loadSettings(): Settings {
     const raw = localStorage.getItem(KEY)
     if (!raw) return DEFAULT_SETTINGS
     const parsed = JSON.parse(raw)
-    // Migrate legacy 'cat' to 'cat1' so existing users keep their long-loop cat.
-    if (parsed.animationStyle === 'cat') parsed.animationStyle = 'cat1'
+    // Migrate legacy values: cube/cat1/cat2 all collapse to 'cat' so
+    // existing installs keep an animation after the upgrade.
+    if (parsed.animationStyle === 'cube' || parsed.animationStyle === 'cat1' || parsed.animationStyle === 'cat2') {
+      parsed.animationStyle = 'cat'
+    }
     return { ...DEFAULT_SETTINGS, ...parsed }
   } catch {
     return DEFAULT_SETTINGS

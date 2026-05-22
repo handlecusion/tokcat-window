@@ -45,18 +45,15 @@ mod frames {
     #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/frames.rs"));
 }
-use frames::{
-    anim_cat2_rgba, anim_cat_rgba, anim_rgba, ANIM_CAT2_LEN, ANIM_CAT_LEN, ANIM_LEN, TRAY_FRAME_PX,
-};
+use frames::{anim_cat2_rgba, anim_parrot_rgba, ANIM_CAT2_LEN, ANIM_PARROT_LEN, TRAY_FRAME_PX};
 
 struct NativeState {
     // Leaked Retained<CALayer> — only ever dereferenced on the main thread.
     anim_layer_ptr: usize,
     // Leaked CGImage retains, one per frame. `*const CGImage` is CF-bridged
     // so we hand it to `layer.contents` as an `AnyObject`.
-    frames_default: Vec<usize>,
     frames_cat: Vec<usize>,
-    frames_cat2: Vec<usize>,
+    frames_parrot: Vec<usize>,
     // Skip the layer.contents write when the loop emits the same (style, idx)
     // twice in a row (level transitions can do this).
     last_set: parking_lot::Mutex<(u32, usize)>,
@@ -138,15 +135,13 @@ pub fn init() -> Result<(), &'static str> {
         button_layer.insertSublayer_atIndex(&anim_layer, 0);
     }
 
-    let frames_default = pre_decode(ANIM_LEN, anim_rgba);
-    let frames_cat = pre_decode(ANIM_CAT_LEN, anim_cat_rgba);
-    let frames_cat2 = pre_decode(ANIM_CAT2_LEN, anim_cat2_rgba);
+    let frames_cat = pre_decode(ANIM_CAT2_LEN, anim_cat2_rgba);
+    let frames_parrot = pre_decode(ANIM_PARROT_LEN, anim_parrot_rgba);
 
     let _ = STATE.set(NativeState {
         anim_layer_ptr: Retained::into_raw(anim_layer) as usize,
-        frames_default,
         frames_cat,
-        frames_cat2,
+        frames_parrot,
         last_set: parking_lot::Mutex::new((u32::MAX, usize::MAX)),
     });
 
@@ -250,9 +245,8 @@ pub fn set_frame<R: Runtime>(app: &AppHandle<R>, style: u32, idx: usize) {
 
 fn apply_frame(state: &'static NativeState, style: u32, idx: usize) {
     let frames = match style {
-        1 => &state.frames_cat,
-        2 => &state.frames_cat2,
-        _ => &state.frames_default,
+        1 => &state.frames_parrot,
+        _ => &state.frames_cat,
     };
     if frames.is_empty() {
         return;
