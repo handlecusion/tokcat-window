@@ -75,6 +75,17 @@ async fn refresh_graph(
         payload: entry.data,
     };
     let _ = app.emit("graph-update", &payload);
+
+    // Tail any JSONL growth since the last tick and re-emit the rate +
+    // trace so the popover updates in lockstep with the user's refresh.
+    let state_arc: Arc<AppState> = (*state).clone();
+    let _ = async_runtime::spawn_blocking(move || state_arc.tailer().tick()).await;
+    let rate_payload = RateUpdate {
+        tokens_per_min: state.tokens_per_min_estimate(),
+        trace: state.usage_trace(600),
+    };
+    let _ = app.emit("rate-update", &rate_payload);
+
     Ok(payload)
 }
 
@@ -124,6 +135,24 @@ fn get_usage_trace(
 #[tauri::command]
 fn get_tokens_per_min(state: tauri::State<'_, Arc<AppState>>) -> f32 {
     state.tokens_per_min_estimate()
+}
+
+/// Resize the popover window so the trace card fits without trailing
+/// whitespace. Called from the frontend whenever the bucket count
+/// changes. Width is kept constant; height is clamped to a sensible
+/// minimum.
+#[tauri::command]
+fn set_popover_height(height: f64, window: tauri::Window) -> Result<(), String> {
+    let h = height.clamp(420.0, 1200.0);
+    let current = window
+        .outer_size()
+        .map_err(|e| format!("outer_size: {}", e))?;
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let logical_w = (current.width as f64) / scale;
+    window
+        .set_size(tauri::LogicalSize::new(logical_w, h))
+        .map_err(|e| format!("set_size: {}", e))?;
+    Ok(())
 }
 
 fn spawn_refresh_loop(app: tauri::AppHandle, state: Arc<AppState>) {
@@ -213,6 +242,7 @@ pub fn run() {
             set_animation_style,
             get_usage_trace,
             get_tokens_per_min,
+            set_popover_height,
             tray::update_tray_title
         ]);
 

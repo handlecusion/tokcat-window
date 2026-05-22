@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Panel } from './components/Panel'
 import { HeaderBar } from './components/HeaderBar'
 import { FilterChips } from './components/FilterChips'
@@ -282,8 +282,35 @@ export default function App() {
     })()
   }, [settings.animationStyle])
 
+  // Resize the native window to fit the current content height. The trace
+  // card's row count changes as buckets come and go; without this the
+  // window either crops the trace or shows trailing whitespace.
+  const pageRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!isTauri() || !pageRef.current) return
+    const el = pageRef.current
+    let raf = 0
+    const push = () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(async () => {
+        const h = el.getBoundingClientRect().height
+        try {
+          const { invoke } = await import('@tauri-apps/api/core')
+          await invoke('set_popover_height', { height: Math.ceil(h) })
+        } catch {}
+      })
+    }
+    push()
+    const ro = new ResizeObserver(push)
+    ro.observe(el)
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+    }
+  }, [trace.length, stats?.totalTokens, view, settings.trayMode])
+
   return (
-    <div className="page">
+    <div className="page" ref={pageRef}>
       <Panel>
         {!payload && !error && <div className="loading">Loading…</div>}
         {error && <div className="error">Error: {error}</div>}
