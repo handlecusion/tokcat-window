@@ -2,8 +2,8 @@ mod animation;
 #[cfg(target_os = "macos")]
 mod native_tray;
 mod state;
-mod tokscale;
 mod tray;
+mod usage_graph;
 mod usage_tail;
 
 use serde::Serialize;
@@ -47,7 +47,7 @@ async fn get_graph(
         });
     }
     let year_clone = year.clone();
-    let data = async_runtime::spawn_blocking(move || tokscale::run(&year_clone))
+    let data = async_runtime::spawn_blocking(move || usage_graph::run(&year_clone))
         .await
         .map_err(|e| format!("join: {}", e))??;
     let entry = state.put(year.clone(), data);
@@ -66,7 +66,7 @@ async fn refresh_graph(
 ) -> Result<GraphPayload, String> {
     // Flip the bounce flag for the whole refresh duration so the tray cat
     // hops up and down while we're fetching. Cleared in the guard below
-    // even if tokscale errors out.
+    // even if the graph refresh errors out.
     state.set_refreshing(true);
     struct RefreshGuard<'a> {
         state: &'a Arc<AppState>,
@@ -80,7 +80,7 @@ async fn refresh_graph(
     let _guard = RefreshGuard { state: state_inner };
 
     let year_clone = year.clone();
-    let data = async_runtime::spawn_blocking(move || tokscale::run(&year_clone))
+    let data = async_runtime::spawn_blocking(move || usage_graph::run(&year_clone))
         .await
         .map_err(|e| format!("join: {}", e))??;
     let entry = state.put(year.clone(), data);
@@ -103,7 +103,7 @@ async fn refresh_graph(
 
     // Guarantee a visible bounce even on cache-warm fetches that return in
     // under a frame; ~450ms gives roughly one full bob at the bounce_loop
-    // frequency. Bounded so a hung tokscale doesn't extend it further.
+    // frequency. Bounded so a slow graph refresh doesn't extend it further.
     tokio::time::sleep(Duration::from_millis(450)).await;
 
     Ok(payload)
@@ -112,11 +112,6 @@ async fn refresh_graph(
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
-}
-
-#[tauri::command]
-fn get_tokscale_info() -> tokscale::TokscaleInfo {
-    tokscale::info()
 }
 
 #[tauri::command]
@@ -181,11 +176,10 @@ fn set_popover_height(height: f64, window: tauri::Window) -> Result<(), String> 
 }
 
 fn spawn_refresh_loop(app: tauri::AppHandle, state: Arc<AppState>) {
-    // The popover graph is still sourced from tokscale (years/contributions
-    // payload, cost calc, etc.). Animation no longer depends on this loop —
-    // usage_tail emits the rate signal at TAIL_TICK_SECS — so this is a
-    // steady 30-min refresh purely for the popover chart. Manual tray refresh
-    // (`refresh_graph`) still fetches on demand and bypasses the cache.
+    // The popover graph is produced in-process from local usage logs.
+    // Animation uses usage_tail at TAIL_TICK_SECS, so this is a steady
+    // 30-minute refresh for the chart payload. Manual tray refresh still
+    // fetches on demand and bypasses the cache.
     async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(REFRESH_SECS)).await;
@@ -194,7 +188,7 @@ fn spawn_refresh_loop(app: tauri::AppHandle, state: Arc<AppState>) {
                 let s = state.clone();
                 let app = app.clone();
                 let y = year.clone();
-                let res = async_runtime::spawn_blocking(move || tokscale::run(&y)).await;
+                let res = async_runtime::spawn_blocking(move || usage_graph::run(&y)).await;
                 if let Ok(Ok(data)) = res {
                     let entry = s.put(year.clone(), data);
                     let payload = GraphPayload {
@@ -289,7 +283,6 @@ pub fn run() {
             get_graph,
             refresh_graph,
             quit_app,
-            get_tokscale_info,
             push_dialog_shield,
             pop_dialog_shield,
             set_animate_tray,

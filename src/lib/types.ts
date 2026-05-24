@@ -30,7 +30,7 @@ export interface YearMeta {
   range: { start: string; end: string }
 }
 
-export interface TokscalePayload {
+export interface UsagePayload {
   meta: {
     generatedAt: string
     version: string
@@ -53,7 +53,7 @@ export interface TokscalePayload {
 export interface StreamEnvelope {
   year: string
   fetchedAt: string
-  payload: TokscalePayload
+  payload: UsagePayload
 }
 
 export interface PerDay {

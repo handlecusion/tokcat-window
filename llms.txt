@@ -1,8 +1,8 @@
 # Tokcat
 
-> Tokcat is a native macOS menu-bar app that visualizes your AI coding token usage — Claude Code, Codex, Cursor, OpenCode, Gemini, Copilot, Amp, Droid — as a 2D or 3D GitHub-style contribution graph. Built with Tauri 2 (Rust + React/Vite), distributed via Homebrew and GitHub Releases. Apple Silicon, macOS 11+. MIT licensed.
+> Tokcat is a native macOS menu-bar app that visualizes your AI coding token usage — Claude Code, Codex, Cursor, OpenCode, Gemini, Copilot, Amp, Droid, Hermes — as a 2D or 3D GitHub-style contribution graph. Built with Tauri 2 (Rust + React/Vite), distributed via Homebrew and GitHub Releases. Apple Silicon, macOS 11+. MIT licensed.
 
-Tokcat is a thin Tauri 2 shell over the [`tokscale`](https://github.com/junhoyeo/tokscale) CLI. The menu-bar cat icon shows today's token count or USD cost; clicking it opens a frosted-glass popover with a contribution graph, per-client filters, streak summaries, and a Settings panel. The app refreshes every 3 minutes by shelling out to `tokscale graph --no-spinner`, never makes a network request other than its updater manifest, stores no telemetry, requires no account.
+Tokcat is a Tauri 2 app with an in-process Rust local-usage reader. The menu-bar cat icon shows today's token count or USD cost; clicking it opens a frosted-glass popover with a contribution graph, per-client filters, streak summaries, and a Settings panel. The app reads supported client logs on-device, never makes a network request other than its updater manifest, stores no telemetry, and requires no account.
 
 ## Install
 
@@ -21,12 +21,12 @@ Tokcat is a thin Tauri 2 shell over the [`tokscale`](https://github.com/junhoyeo
 
 - [Tauri shell source](https://github.com/handlecusion/tokcat/tree/main/src-tauri): Rust backend, native tray, animation frames
 - [Frontend source](https://github.com/handlecusion/tokcat/tree/main/src): React + Vite, react-three-fiber 3D graph
-- [tokscale upstream](https://github.com/junhoyeo/tokscale): the CLI Tokcat depends on for all token/cost data
+- [tokscale upstream](https://github.com/junhoyeo/tokscale): reference project for supported local log formats
 
 ## Supported AI clients
 
-Whatever `tokscale` discovers locally: Claude Code, Codex, Cursor, OpenCode, Gemini, Copilot, Amp, Droid, and any future client `tokscale` adds.
+Claude Code, Codex, Cursor, OpenCode, Gemini, Copilot, Amp, Droid, Hermes, and compatible local logs.
 
 ## Privacy
 
-No telemetry. No cloud sync. No account. Network access is limited to the GitHub Releases updater manifest (`latest.json`) checked every 30 minutes. All token data is read locally from session logs by `tokscale` on disk.
+No telemetry. No cloud sync. No account. Network access is limited to the GitHub Releases updater manifest (`latest.json`) checked every 30 minutes. All token data is read locally from session logs on disk.

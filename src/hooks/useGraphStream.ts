@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import type { StreamEnvelope, TokscalePayload } from '../lib/types'
+import type { StreamEnvelope, UsagePayload } from '../lib/types'
 import { isTauri } from '../lib/runtime'
 
 interface State {
-  payload: TokscalePayload | null
+  payload: UsagePayload | null
   fetchedAt: string | null
   error: string | null
 }

@@ -1,9 +1,8 @@
 // Incremental tailer for per-CLI usage JSONL.
 //
-// Replaces the 3-minute `tokscale graph` subprocess polling cycle as the
-// source of truth for the animation/rate signal. Patterned on tokscale's
-// own SourceMessageCache strategy: track (file, offset, mtime), re-read
-// only growth, dedup streaming retries by msgId:reqId with per-field max.
+// Incremental source of truth for the animation/rate signal. Tracks
+// (file, offset, mtime), re-reads only growth, and dedups streaming retries
+// by msgId:reqId with per-field max.
 //
 // Phase 1: Claude Code (~/.claude/projects/**/*.jsonl)
 // Phase 2a: Codex CLI (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl)

@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Canvas, useThree } from '@react-three/fiber'
 import { OrthographicCamera, OrbitControls } from '@react-three/drei'
-import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import * as THREE from 'three'
 import type { GridLayout } from '../lib/grid'
 import { formatCost, formatMonthDay, humanizeTokens } from '../lib/format'
@@ -61,7 +60,7 @@ function saveCam(s: CamState) {
 export function ContributionGraph3D({ grid, activeLight = '#bfdbfe', activeDark = '#1e3a8a', accent = '#2563eb' }: Props) {
   const [hover, setHover] = useState<HoverInfo | null>(null)
   const wrapRef = useRef<HTMLDivElement | null>(null)
-  const controlsRef = useRef<OrbitControlsImpl | null>(null)
+  const controlsRef = useRef<any | null>(null)
   const invalidateRef = useRef<(() => void) | null>(null)
 
   const totalWidth = grid.cols * STEP

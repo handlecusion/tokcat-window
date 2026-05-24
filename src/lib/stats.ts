@@ -1,7 +1,7 @@
-import type { PerDay, Stats, TokscalePayload } from './types'
+import type { PerDay, Stats, UsagePayload } from './types'
 import { computeStreaks } from './streaks'
 
-export function computeStats(payload: TokscalePayload, selectedClients: Set<string>): Stats {
+export function computeStats(payload: UsagePayload, selectedClients: Set<string>): Stats {
   const perDay: PerDay[] = []
   const perDayMap = new Map<string, PerDay>()
   const present = new Set<string>()

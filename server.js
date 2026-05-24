@@ -1,112 +1,57 @@
 import express from 'express'
 import { createServer as createViteServer } from 'vite'
-import { spawn } from 'node:child_process'
-import fs from 'node:fs'
 import http from 'node:http'
-import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = 4061
 const REFRESH_MS = 3 * 60 * 1000
-const ONESHOT_MAX_AGE_MS = 30 * 1000
 
-const TOKSCALE_SEARCH_PATHS = [
-  '/opt/homebrew/bin/tokscale',
-  '/usr/local/bin/tokscale',
-  path.join(os.homedir(), '.cargo/bin/tokscale'),
-]
-const NOT_FOUND_HINT =
-  'tokscale CLI not found. Install with: brew install junhoyeo/tokscale/tokscale'
-
-function locateTokscale() {
-  for (const p of TOKSCALE_SEARCH_PATHS) {
-    try { if (fs.existsSync(p)) return p } catch {}
-  }
-  return 'tokscale'
-}
-
-function spawnAndCollect(bin, args) {
-  return new Promise((resolve, reject) => {
-    let proc
-    try {
-      proc = spawn(bin, args)
-    } catch (e) {
-      return reject(e)
-    }
-    let stdout = ''
-    let stderr = ''
-    let settled = false
-    const settle = fn => (...a) => { if (!settled) { settled = true; fn(...a) } }
-    const ok = settle(resolve)
-    const err = settle(reject)
-    proc.stdout?.on('data', d => { stdout += d.toString() })
-    proc.stderr?.on('data', d => { stderr += d.toString() })
-    proc.on('error', e => err(e))
-    proc.on('close', code => {
-      if (code !== 0) return err(new Error(`${bin} exited ${code}: ${stderr}`))
-      try { ok(JSON.parse(stdout)) } catch (e) { err(e) }
-    })
-  })
-}
-
-async function runTokscale(year) {
-  const args = ['graph', '--no-spinner']
-  if (year) args.push('--year', String(year))
-  const bin = locateTokscale()
-  try {
-    return await spawnAndCollect(bin, args)
-  } catch (e) {
-    const msg = String(e?.message || e)
-    if (e?.code === 'ENOENT' || /ENOENT/.test(msg)) {
-      throw new Error(NOT_FOUND_HINT)
-    }
-    throw e
+function emptyGraph(year) {
+  const y = year || String(new Date().getFullYear())
+  const now = new Date().toISOString()
+  return {
+    meta: {
+      generatedAt: now,
+      version: 'tokcat-dev',
+      dateRange: { start: '', end: '' },
+    },
+    summary: {
+      totalTokens: 0,
+      totalCost: 0,
+      totalDays: 0,
+      activeDays: 0,
+      averagePerDay: 0,
+      maxCostInSingleDay: 0,
+      clients: [],
+      models: [],
+    },
+    years: [
+      {
+        year: y,
+        totalTokens: 0,
+        totalCost: 0,
+        range: { start: '', end: '' },
+      },
+    ],
+    contributions: [],
   }
 }
 
-async function tokscaleVersion() {
-  const bin = locateTokscale()
-  try {
-    const out = await new Promise((resolve, reject) => {
-      const proc = spawn(bin, ['--version'])
-      let stdout = ''
-      proc.stdout?.on('data', d => { stdout += d.toString() })
-      proc.on('error', reject)
-      proc.on('close', () => resolve(stdout))
-    })
-    const token = out.trim().split(/\s+/).pop() || ''
-    const m = /^(\d+)\.(\d+)\.(\d+)/.exec(token)
-    return m ? `${m[1]}.${m[2]}.${m[3]}` : null
-  } catch {
-    return null
-  }
-}
-
-// cache: year -> { data, lastFetched, subscribers: Set<res>, timer }
 const cache = new Map()
 
 function ensureEntry(year) {
   let entry = cache.get(year)
   if (!entry) {
-    entry = { data: null, lastFetched: 0, subscribers: new Set(), timer: null }
+    entry = { data: emptyGraph(year), lastFetched: Date.now(), subscribers: new Set(), timer: null }
     cache.set(year, entry)
   }
   return entry
 }
 
-async function fetchAndStore(year) {
-  const entry = ensureEntry(year)
-  const data = await runTokscale(year)
-  entry.data = data
-  entry.lastFetched = Date.now()
-  return data
-}
-
 function broadcast(year) {
-  const entry = cache.get(year)
-  if (!entry || !entry.data) return
+  const entry = ensureEntry(year)
   const payload = JSON.stringify({
     year,
     fetchedAt: new Date(entry.lastFetched).toISOString(),
@@ -121,13 +66,10 @@ function broadcast(year) {
 function startTimer(year) {
   const entry = ensureEntry(year)
   if (entry.timer) return
-  entry.timer = setInterval(async () => {
-    try {
-      await fetchAndStore(year)
-      broadcast(year)
-    } catch (err) {
-      console.error(`[tokscale-3d] refresh error for ${year}:`, err.message)
-    }
+  entry.timer = setInterval(() => {
+    entry.data = emptyGraph(year)
+    entry.lastFetched = Date.now()
+    broadcast(year)
   }, REFRESH_MS)
 }
 
@@ -142,19 +84,12 @@ function stopTimerIfIdle(year) {
 
 const app = express()
 
-app.get('/api/graph', async (req, res) => {
+app.get('/api/graph', (req, res) => {
   const year = String(req.query.year || '')
-  try {
-    const entry = ensureEntry(year)
-    const stale = !entry.data || Date.now() - entry.lastFetched > ONESHOT_MAX_AGE_MS
-    if (stale) await fetchAndStore(year)
-    res.json(entry.data)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  res.json(ensureEntry(year).data)
 })
 
-app.get('/api/stream', async (req, res) => {
+app.get('/api/stream', (req, res) => {
   const year = String(req.query.year || '')
   res.set({
     'Content-Type': 'text/event-stream',
@@ -169,31 +104,17 @@ app.get('/api/stream', async (req, res) => {
 
   const entry = ensureEntry(year)
   entry.subscribers.add(res)
+  broadcast(year)
 
-  try {
-    if (!entry.data) await fetchAndStore(year)
-    const payload = JSON.stringify({
-      year,
-      fetchedAt: new Date(entry.lastFetched).toISOString(),
-      payload: entry.data,
-    })
-    res.write(`event: data\ndata: ${payload}\n\n`)
-  } catch (err) {
-    res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`)
-  }
-
-  const ka = setInterval(() => {
+  const keepalive = setInterval(() => {
     try { res.write(`: keepalive ${Date.now()}\n\n`) } catch {}
   }, 25000)
 
   startTimer(year)
-  console.log(`[sse] +sub year=${year} total=${entry.subscribers.size}`)
-
   req.on('close', () => {
-    clearInterval(ka)
+    clearInterval(keepalive)
     entry.subscribers.delete(res)
     stopTimerIfIdle(year)
-    console.log(`[sse] -sub year=${year} total=${entry.subscribers.size}`)
   })
 })
 
@@ -210,5 +131,5 @@ const vite = await createViteServer({
 app.use(vite.middlewares)
 
 httpServer.listen(PORT, () => {
-  console.log(`[tokscale-3d] listening on http://localhost:${PORT}`)
+  console.log(`[tokcat] dev server listening on http://localhost:${PORT}`)
 })

@@ -1,6 +1,6 @@
 # Tokcat
 
-> Tokcat is a native macOS menu-bar app that visualizes your AI coding token usage — Claude Code, Codex, Cursor, OpenCode, Gemini, Copilot, Amp, Droid — as a 2D or 3D GitHub-style contribution graph. Built with Tauri 2 (Rust + React/Vite), distributed via Homebrew and GitHub Releases. Apple Silicon, macOS 11+. MIT licensed.
+> Tokcat is a native macOS menu-bar app that visualizes your AI coding token usage — Claude Code, Codex, Cursor, OpenCode, Gemini, Copilot, Amp, Droid, Hermes — as a 2D or 3D GitHub-style contribution graph. Built with Tauri 2 (Rust + React/Vite), distributed via Homebrew and GitHub Releases. Apple Silicon, macOS 11+. MIT licensed.
 
 ## Install
 
@@ -19,11 +19,11 @@
 
 - [Tauri shell source](https://github.com/handlecusion/tokcat/tree/main/src-tauri): Rust backend, native tray, animation frames
 - [Frontend source](https://github.com/handlecusion/tokcat/tree/main/src): React + Vite, react-three-fiber 3D graph
-- [tokscale upstream](https://github.com/junhoyeo/tokscale): the CLI Tokcat depends on for all token/cost data
+- [tokscale upstream](https://github.com/junhoyeo/tokscale): reference project for supported local log formats
 
 ## Supported AI clients
 
-Whatever `tokscale` discovers locally: Claude Code, OpenAI Codex, Cursor, OpenCode, Google Gemini, GitHub Copilot, Amp, Droid.
+Claude Code, OpenAI Codex, Cursor, OpenCode, Google Gemini, GitHub Copilot, Amp, Droid, Hermes, and compatible local logs.
 
 ## Privacy
 

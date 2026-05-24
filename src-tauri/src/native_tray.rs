@@ -288,4 +288,3 @@ fn apply_frame(state: &'static NativeState, style: u32, idx: usize) {
         layer.setContents(Some(&*cgimg_ptr));
     }
 }
-

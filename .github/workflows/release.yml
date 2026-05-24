@@ -162,6 +162,8 @@ jobs:
           fi
           sed -i.bak -E "s|^  version \"[^\"]*\"$|  version \"${VERSION}\"|" "$CASK"
           sed -i.bak -E "s|^  sha256 \"[^\"]*\"$|  sha256 \"${SHA256}\"|" "$CASK"
+          sed -i.bak -E "s|^  desc \"[^\"]*\"$|  desc \"Menubar dashboard for local AI token usage\"|" "$CASK"
+          sed -i.bak -E '/^  depends_on formula: "tokscale"$/d' "$CASK"
           rm -f "${CASK}.bak"
           echo "--- updated cask ---"
           cat "$CASK"
@@ -171,6 +173,10 @@ jobs:
           fi
           if ! grep -q "sha256 \"${SHA256}\"" "$CASK"; then
             echo "::error::sha256 not updated in cask"
+            exit 1
+          fi
+          if grep -q 'depends_on formula: "tokscale"' "$CASK"; then
+            echo "::error::tokscale dependency still present in cask"
             exit 1
           fi
 
