@@ -536,6 +536,52 @@ impl CodexTotals {
         }
     }
 
+    fn delta_from(self, previous: Self) -> Option<Self> {
+        if self.input < previous.input
+            || self.output < previous.output
+            || self.cached < previous.cached
+            || self.reasoning < previous.reasoning
+        {
+            return None;
+        }
+
+        Some(Self {
+            input: self.input - previous.input,
+            output: self.output - previous.output,
+            cached: self.cached - previous.cached,
+            reasoning: self.reasoning - previous.reasoning,
+        })
+    }
+
+    fn saturating_add(self, other: Self) -> Self {
+        Self {
+            input: self.input.saturating_add(other.input),
+            output: self.output.saturating_add(other.output),
+            cached: self.cached.saturating_add(other.cached),
+            reasoning: self.reasoning.saturating_add(other.reasoning),
+        }
+    }
+
+    fn total(self) -> i64 {
+        self.input
+            .saturating_add(self.output)
+            .saturating_add(self.cached)
+            .saturating_add(self.reasoning)
+    }
+
+    fn looks_like_stale_regression(self, previous: Self, last: Self) -> bool {
+        let previous_total = previous.total();
+        let current_total = self.total();
+        let last_total = last.total();
+
+        if previous_total <= 0 || current_total <= 0 || last_total <= 0 {
+            return false;
+        }
+
+        current_total.saturating_mul(100) >= previous_total.saturating_mul(98)
+            || current_total.saturating_add(last_total.saturating_mul(2)) >= previous_total
+    }
+
     fn into_tokens(self) -> TokenBreakdown {
         let cache_read = self.cached.min(self.input).max(0);
         TokenBreakdown {
@@ -555,7 +601,11 @@ fn parse_codex_file(path: &Path) -> Vec<UsageMessage> {
     };
     let fallback_ts = file_modified_timestamp_ms(path);
     let mut current_model: Option<String> = None;
+    let mut previous_totals: Option<CodexTotals> = None;
     let mut provider = "openai".to_string();
+    let mut forked_child_waiting_for_turn_context = false;
+    let mut forked_child_inherited_baseline: Option<CodexTotals> = None;
+    let mut forked_child_inherited_reported_total: Option<i64> = None;
     let mut out = Vec::new();
 
     for line in BufReader::new(file).lines().map_while(Result::ok) {
@@ -568,6 +618,34 @@ fn parse_codex_file(path: &Path) -> Vec<UsageMessage> {
         if entry_type == "session_meta" {
             if let Some(p) = string_value(payload.get("model_provider")) {
                 provider = p;
+            }
+            if string_value(payload.get("forked_from_id"))
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+            {
+                forked_child_waiting_for_turn_context = true;
+                forked_child_inherited_baseline = None;
+                forked_child_inherited_reported_total = None;
+            }
+        }
+
+        if forked_child_waiting_for_turn_context {
+            if entry_type == "turn_context" {
+                forked_child_waiting_for_turn_context = false;
+            } else {
+                if entry_type == "event_msg"
+                    && payload.get("type").and_then(Value::as_str) == Some("token_count")
+                {
+                    if let Some(info) = payload.get("info") {
+                        remember_codex_forked_child_inherited_baseline(
+                            info,
+                            &mut previous_totals,
+                            &mut forked_child_inherited_baseline,
+                            &mut forked_child_inherited_reported_total,
+                        );
+                    }
+                }
+                continue;
             }
         }
 
@@ -601,16 +679,61 @@ fn parse_codex_file(path: &Path) -> Vec<UsageMessage> {
         if model != "unknown" {
             current_model = Some(model.clone());
         }
-        let usage = info
-            .get("last_token_usage")
-            .or_else(|| info.get("total_token_usage"));
-        let Some(usage) = usage else {
+        let total_usage_value = info.get("total_token_usage");
+        let total_usage = total_usage_value.map(CodexTotals::from_usage);
+        let last_usage = info.get("last_token_usage").map(CodexTotals::from_usage);
+
+        if codex_forked_child_matches_inherited_baseline(
+            total_usage_value,
+            total_usage,
+            forked_child_inherited_baseline,
+            forked_child_inherited_reported_total,
+        ) {
+            if let Some(total) = total_usage {
+                previous_totals = Some(total);
+            }
+            forked_child_inherited_baseline = None;
+            forked_child_inherited_reported_total = None;
             continue;
+        }
+        forked_child_inherited_baseline = None;
+        forked_child_inherited_reported_total = None;
+
+        let (tokens, next_totals) = match (total_usage, last_usage, previous_totals) {
+            (Some(total), Some(last), Some(previous)) => {
+                if total == previous {
+                    continue;
+                }
+                if total.delta_from(previous).is_none()
+                    && total.looks_like_stale_regression(previous, last)
+                {
+                    continue;
+                }
+                (last.into_tokens(), Some(total))
+            }
+            (Some(total), Some(last), None) => (last.into_tokens(), Some(total)),
+            (Some(total), None, Some(previous)) => {
+                if total == previous {
+                    continue;
+                }
+                if let Some(delta) = total.delta_from(previous) {
+                    (delta.into_tokens(), Some(total))
+                } else {
+                    previous_totals = Some(total);
+                    continue;
+                }
+            }
+            (Some(total), None, None) => (total.into_tokens(), Some(total)),
+            (None, Some(last), Some(previous)) => {
+                (last.into_tokens(), Some(previous.saturating_add(last)))
+            }
+            (None, Some(last), None) => (last.into_tokens(), None),
+            (None, None, _) => continue,
         };
-        let tokens = CodexTotals::from_usage(usage).into_tokens();
         if tokens.total() <= 0 {
             continue;
         }
+        previous_totals = next_totals;
         let ts = timestamp_ms_from_value(value.get("timestamp")).unwrap_or(fallback_ts);
         let mut msg = UsageMessage::new("codex", model, provider.clone(), ts, tokens, 0.0);
         msg.dedup_key = Some(format!(
@@ -624,6 +747,46 @@ fn parse_codex_file(path: &Path) -> Vec<UsageMessage> {
         out.push(msg);
     }
     out
+}
+
+fn remember_codex_forked_child_inherited_baseline(
+    info: &Value,
+    previous_totals: &mut Option<CodexTotals>,
+    forked_child_inherited_baseline: &mut Option<CodexTotals>,
+    forked_child_inherited_reported_total: &mut Option<i64>,
+) {
+    let Some(total_usage) = info.get("total_token_usage") else {
+        return;
+    };
+    let totals = CodexTotals::from_usage(total_usage);
+    *previous_totals = Some(totals);
+    *forked_child_inherited_baseline = Some(totals);
+    *forked_child_inherited_reported_total = codex_reported_total_tokens(total_usage);
+}
+
+fn codex_forked_child_matches_inherited_baseline(
+    total_usage_value: Option<&Value>,
+    total_usage: Option<CodexTotals>,
+    forked_child_inherited_baseline: Option<CodexTotals>,
+    forked_child_inherited_reported_total: Option<i64>,
+) -> bool {
+    if let (Some(usage), Some(baseline)) =
+        (total_usage_value, forked_child_inherited_reported_total)
+    {
+        if codex_reported_total_tokens(usage) == Some(baseline) {
+            return true;
+        }
+    }
+
+    if let (Some(totals), Some(baseline)) = (total_usage, forked_child_inherited_baseline) {
+        return totals == baseline;
+    }
+
+    false
+}
+
+fn codex_reported_total_tokens(usage: &Value) -> Option<i64> {
+    i64_value(usage.get("total_tokens")).filter(|total| *total >= 0)
 }
 
 fn parse_cursor() -> Vec<UsageMessage> {
@@ -1315,24 +1478,53 @@ fn parse_hermes() -> Vec<UsageMessage> {
     let Some(path) = hermes_db_path() else {
         return Vec::new();
     };
+    parse_hermes_db(&path)
+}
+
+fn parse_hermes_db(path: &Path) -> Vec<UsageMessage> {
     let conn = match Connection::open_with_flags(
-        &path,
+        path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     ) {
         Ok(c) => c,
         Err(_) => return Vec::new(),
     };
-    let mut stmt = match conn.prepare(
+
+    let columns = sqlite_table_columns(&conn, "sessions");
+    let reasoning_expr = sqlite_column_or(&columns, "reasoning_tokens", "0");
+    let provider_expr = sqlite_column_or(&columns, "billing_provider", "''");
+    let started_expr = sqlite_column_or(&columns, "started_at", "0");
+    let ended_expr = sqlite_column_or(&columns, "ended_at", "0");
+    let actual_cost_expr = sqlite_column_or(&columns, "actual_cost_usd", "0");
+    let estimated_cost_expr = sqlite_column_or(&columns, "estimated_cost_usd", "0");
+    let message_count_expr = sqlite_column_or(&columns, "message_count", "1");
+    let order_expr = if columns.contains("started_at") {
+        "started_at, id"
+    } else {
+        "id"
+    };
+
+    let query = format!(
         r#"
         SELECT id, model,
             COALESCE(input_tokens, 0),
             COALESCE(output_tokens, 0),
             COALESCE(cache_read_tokens, 0),
-            COALESCE(cache_write_tokens, 0)
+            COALESCE(cache_write_tokens, 0),
+            {reasoning_expr},
+            {provider_expr},
+            {started_expr},
+            {ended_expr},
+            {actual_cost_expr},
+            {estimated_cost_expr},
+            {message_count_expr}
         FROM sessions
         WHERE model IS NOT NULL AND TRIM(model) != ''
-        "#,
-    ) {
+        ORDER BY {order_expr}
+        "#
+    );
+
+    let mut stmt = match conn.prepare(&query) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -1344,16 +1536,45 @@ fn parse_hermes() -> Vec<UsageMessage> {
             row.get::<_, i64>(3)?,
             row.get::<_, i64>(4)?,
             row.get::<_, i64>(5)?,
+            row.get::<_, i64>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, f64>(8)?,
+            row.get::<_, f64>(9)?,
+            row.get::<_, f64>(10)?,
+            row.get::<_, f64>(11)?,
+            row.get::<_, i32>(12)?,
         ))
     }) {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };
-    let ts = file_modified_timestamp_ms(&path);
+    let fallback_ts = file_modified_timestamp_ms(path);
     let mut out = Vec::new();
     for row in rows.flatten() {
-        let (id, model, input, output, cache_read, cache_write) = row;
-        let provider = infer_provider(&model).to_string();
+        let (
+            id,
+            model,
+            input,
+            output,
+            cache_read,
+            cache_write,
+            reasoning,
+            billing_provider,
+            started_at,
+            ended_at,
+            actual_cost,
+            estimated_cost,
+            message_count,
+        ) = row;
+        let provider = hermes_provider(&billing_provider, &model);
+        let ts = hermes_timestamp_ms(started_at, ended_at, fallback_ts);
+        let cost = if actual_cost > 0.0 {
+            actual_cost
+        } else if estimated_cost > 0.0 {
+            estimated_cost
+        } else {
+            0.0
+        };
         let mut msg = UsageMessage::new(
             "hermes",
             model,
@@ -1364,14 +1585,64 @@ fn parse_hermes() -> Vec<UsageMessage> {
                 output: output.max(0),
                 cache_read: cache_read.max(0),
                 cache_write: cache_write.max(0),
-                reasoning: 0,
+                reasoning: reasoning.max(0),
             },
-            0.0,
+            cost,
         );
+        msg.messages = message_count.max(1);
         msg.dedup_key = Some(format!("hermes:{}", id));
         out.push(msg);
     }
     out
+}
+
+fn sqlite_table_columns(conn: &Connection, table: &str) -> HashSet<String> {
+    let mut columns = HashSet::new();
+    let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({})", table)) else {
+        return columns;
+    };
+    let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) else {
+        return columns;
+    };
+    for name in rows.flatten() {
+        columns.insert(name);
+    }
+    columns
+}
+
+fn sqlite_column_or(columns: &HashSet<String>, name: &str, fallback: &str) -> String {
+    if columns.contains(name) {
+        format!("COALESCE({}, {})", name, fallback)
+    } else {
+        fallback.to_string()
+    }
+}
+
+fn hermes_provider(billing_provider: &str, model: &str) -> String {
+    let provider = billing_provider.trim().to_lowercase();
+    if provider.contains("anthropic") {
+        "anthropic".to_string()
+    } else if provider.contains("openai") {
+        "openai".to_string()
+    } else if provider.contains("google") || provider.contains("gemini") {
+        "google".to_string()
+    } else if provider.contains("xai") || provider.contains("grok") {
+        "xai".to_string()
+    } else if provider.contains("deepseek") {
+        "deepseek".to_string()
+    } else if provider.contains("meta") || provider.contains("llama") {
+        "meta".to_string()
+    } else if provider.is_empty() {
+        infer_provider(model).to_string()
+    } else {
+        provider
+    }
+}
+
+fn hermes_timestamp_ms(started_at: f64, ended_at: f64, fallback_ts: i64) -> i64 {
+    normalize_epoch_ms_f64(started_at)
+        .or_else(|| normalize_epoch_ms_f64(ended_at))
+        .unwrap_or(fallback_ts)
 }
 
 fn collect_files(root: &Path, pred: impl Fn(&Path) -> bool + Copy) -> Vec<PathBuf> {
@@ -1471,6 +1742,23 @@ fn normalize_epoch_ms(raw: i64) -> i64 {
         100_000_000_000.. => raw,
         _ => raw.saturating_mul(1000),
     }
+}
+
+fn normalize_epoch_ms_f64(raw: f64) -> Option<i64> {
+    if !raw.is_finite() || raw <= 0.0 {
+        return None;
+    }
+    let abs = raw.abs();
+    let millis = if abs >= 100_000_000_000_000_000.0 {
+        raw / 1_000_000.0
+    } else if abs >= 100_000_000_000_000.0 {
+        raw / 1_000.0
+    } else if abs >= 100_000_000_000.0 {
+        raw
+    } else {
+        raw * 1000.0
+    };
+    Some(millis.round() as i64)
 }
 
 fn parse_date_to_timestamp_ms(date: &str) -> i64 {
@@ -1653,6 +1941,18 @@ fn estimate_cost(model: &str, provider: &str, tokens: &TokenBreakdown) -> f64 {
 
 fn bundled_price(model: &str, provider: &str) -> Price {
     let m = model.to_lowercase();
+    let normalized = m.replace('.', "-");
+    if normalized.contains("opus-4-5")
+        || normalized.contains("opus-4-6")
+        || normalized.contains("opus-4-7")
+    {
+        return Price {
+            input: 5.0,
+            output: 25.0,
+            cache_read: 0.5,
+            cache_write: 6.25,
+        };
+    }
     if m.contains("opus") {
         return Price {
             input: 15.0,
@@ -1661,12 +1961,12 @@ fn bundled_price(model: &str, provider: &str) -> Price {
             cache_write: 18.75,
         };
     }
-    if m.contains("sonnet") || m.contains("claude") {
+    if normalized.contains("haiku-4-5") {
         return Price {
-            input: 3.0,
-            output: 15.0,
-            cache_read: 0.3,
-            cache_write: 3.75,
+            input: 1.0,
+            output: 5.0,
+            cache_read: 0.1,
+            cache_write: 1.25,
         };
     }
     if m.contains("haiku") {
@@ -1677,6 +1977,14 @@ fn bundled_price(model: &str, provider: &str) -> Price {
             cache_write: 1.0,
         };
     }
+    if m.contains("sonnet") || m.contains("claude") {
+        return Price {
+            input: 3.0,
+            output: 15.0,
+            cache_read: 0.3,
+            cache_write: 3.75,
+        };
+    }
     if m.contains("gpt-4o") {
         return Price {
             input: 2.5,
@@ -1685,12 +1993,44 @@ fn bundled_price(model: &str, provider: &str) -> Price {
             cache_write: 2.5,
         };
     }
+    if normalized.starts_with("gpt-5-5") || normalized.contains("gpt-5-5-codex") {
+        return Price {
+            input: 5.0,
+            output: 30.0,
+            cache_read: 0.5,
+            cache_write: 0.0,
+        };
+    }
+    if normalized.starts_with("gpt-5-4") || normalized.contains("gpt-5-4-codex") {
+        return Price {
+            input: 2.5,
+            output: 15.0,
+            cache_read: 0.25,
+            cache_write: 0.0,
+        };
+    }
+    if normalized.starts_with("gpt-5-3") || normalized.contains("gpt-5-3-codex") {
+        return Price {
+            input: 1.75,
+            output: 14.0,
+            cache_read: 0.175,
+            cache_write: 0.0,
+        };
+    }
+    if normalized.starts_with("gpt-5-2") || normalized.contains("gpt-5-2-codex") {
+        return Price {
+            input: 1.75,
+            output: 14.0,
+            cache_read: 0.175,
+            cache_write: 0.0,
+        };
+    }
     if m.starts_with("gpt-5") || m.contains("codex") {
         return Price {
             input: 1.25,
             output: 10.0,
             cache_read: 0.125,
-            cache_write: 1.25,
+            cache_write: 0.0,
         };
     }
     if m.starts_with("o3") || m.starts_with("o4") {
@@ -1699,6 +2039,22 @@ fn bundled_price(model: &str, provider: &str) -> Price {
             output: 40.0,
             cache_read: 2.5,
             cache_write: 10.0,
+        };
+    }
+    if normalized.contains("glm-4-7-free") {
+        return Price {
+            input: 0.6,
+            output: 2.2,
+            cache_read: 0.11,
+            cache_write: 0.0,
+        };
+    }
+    if normalized.contains("kimi-k2-5-free") {
+        return Price {
+            input: 0.6,
+            output: 3.0,
+            cache_read: 0.1,
+            cache_write: 0.0,
         };
     }
     if m.contains("gemini") && m.contains("flash") {
@@ -1728,7 +2084,7 @@ fn bundled_price(model: &str, provider: &str) -> Price {
             input: 1.25,
             output: 10.0,
             cache_read: 0.125,
-            cache_write: 1.25,
+            cache_write: 0.0,
         },
         "google" => Price {
             input: 1.25,
@@ -1749,6 +2105,116 @@ fn bundled_price(model: &str, provider: &str) -> Price {
 mod tests {
     use super::*;
 
+    fn assert_price(model: &str, provider: &str, expected: Price) {
+        let actual = bundled_price(model, provider);
+        assert!((actual.input - expected.input).abs() < f64::EPSILON);
+        assert!((actual.output - expected.output).abs() < f64::EPSILON);
+        assert!((actual.cache_read - expected.cache_read).abs() < f64::EPSILON);
+        assert!((actual.cache_write - expected.cache_write).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn bundled_price_matches_current_claude_model_families() {
+        assert_price(
+            "claude-opus-4-7",
+            "anthropic",
+            Price {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+            },
+        );
+        assert_price(
+            "claude-opus-4-5-20251101",
+            "anthropic",
+            Price {
+                input: 5.0,
+                output: 25.0,
+                cache_read: 0.5,
+                cache_write: 6.25,
+            },
+        );
+        assert_price(
+            "claude-opus-4-1",
+            "anthropic",
+            Price {
+                input: 15.0,
+                output: 75.0,
+                cache_read: 1.5,
+                cache_write: 18.75,
+            },
+        );
+        assert_price(
+            "claude-haiku-4-5-20251001",
+            "anthropic",
+            Price {
+                input: 1.0,
+                output: 5.0,
+                cache_read: 0.1,
+                cache_write: 1.25,
+            },
+        );
+    }
+
+    #[test]
+    fn bundled_price_matches_current_gpt_5_family() {
+        assert_price(
+            "gpt-5.5",
+            "openai",
+            Price {
+                input: 5.0,
+                output: 30.0,
+                cache_read: 0.5,
+                cache_write: 0.0,
+            },
+        );
+        assert_price(
+            "gpt-5.3-codex",
+            "openai",
+            Price {
+                input: 1.75,
+                output: 14.0,
+                cache_read: 0.175,
+                cache_write: 0.0,
+            },
+        );
+        assert_price(
+            "gpt-5.1-codex-max",
+            "openai",
+            Price {
+                input: 1.25,
+                output: 10.0,
+                cache_read: 0.125,
+                cache_write: 0.0,
+            },
+        );
+    }
+
+    #[test]
+    fn bundled_price_matches_openrouter_free_suffix_models() {
+        assert_price(
+            "glm-4.7-free",
+            "opencode",
+            Price {
+                input: 0.6,
+                output: 2.2,
+                cache_read: 0.11,
+                cache_write: 0.0,
+            },
+        );
+        assert_price(
+            "kimi-k2.5-free",
+            "opencode",
+            Price {
+                input: 0.6,
+                output: 3.0,
+                cache_read: 0.1,
+                cache_write: 0.0,
+            },
+        );
+    }
+
     #[test]
     fn codex_cached_tokens_do_not_double_count_input() {
         let tokens = CodexTotals {
@@ -1762,6 +2228,81 @@ mod tests {
         assert_eq!(tokens.input, 70);
         assert_eq!(tokens.cache_read, 30);
         assert_eq!(tokens.total(), 125);
+    }
+
+    #[test]
+    fn codex_parser_skips_repeated_total_snapshots() {
+        let path = codex_test_jsonl_path("repeated-total");
+        fs::write(
+            &path,
+            [
+                r#"{"type":"session_meta","payload":{"model_provider":"openai"}}"#,
+                r#"{"type":"turn_context","payload":{"model_info":{"slug":"gpt-5.5"}}}"#,
+                r#"{"timestamp":"2026-05-24T00:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}}}"#,
+                r#"{"timestamp":"2026-05-24T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let messages = parse_codex_file(&path);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].tokens.input, 80);
+        assert_eq!(messages[0].tokens.cache_read, 20);
+        assert_eq!(messages[0].tokens.output, 10);
+
+        cleanup_temp_file(&path);
+    }
+
+    #[test]
+    fn codex_parser_skips_stale_regression_snapshots() {
+        let path = codex_test_jsonl_path("stale-regression");
+        fs::write(
+            &path,
+            [
+                r#"{"type":"turn_context","payload":{"model_info":{"slug":"gpt-5.5"}}}"#,
+                r#"{"timestamp":"2026-05-24T00:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":1000,"total_tokens":1000},"last_token_usage":{"input_tokens":100,"total_tokens":100}}}}"#,
+                r#"{"timestamp":"2026-05-24T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":990,"total_tokens":990},"last_token_usage":{"input_tokens":50,"total_tokens":50}}}}"#,
+                r#"{"timestamp":"2026-05-24T00:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":1060,"total_tokens":1060},"last_token_usage":{"input_tokens":60,"total_tokens":60}}}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let messages = parse_codex_file(&path);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.tokens.input)
+                .sum::<i64>(),
+            160
+        );
+
+        cleanup_temp_file(&path);
+    }
+
+    #[test]
+    fn codex_parser_skips_forked_session_inherited_baseline() {
+        let path = codex_test_jsonl_path("forked-baseline");
+        fs::write(
+            &path,
+            [
+                r#"{"type":"session_meta","payload":{"forked_from_id":"parent","model_provider":"openai"}}"#,
+                r#"{"timestamp":"2026-05-24T00:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"total_tokens":1000},"last_token_usage":{"input_tokens":1000,"total_tokens":1000}}}}"#,
+                r#"{"type":"turn_context","payload":{"model_info":{"slug":"gpt-5.5"}}}"#,
+                r#"{"timestamp":"2026-05-24T00:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":1000,"total_tokens":1000},"last_token_usage":{"input_tokens":20,"total_tokens":20}}}}"#,
+                r#"{"timestamp":"2026-05-24T00:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":1100,"total_tokens":1100},"last_token_usage":{"input_tokens":100,"total_tokens":100}}}}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let messages = parse_codex_file(&path);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].tokens.input, 100);
+
+        cleanup_temp_file(&path);
     }
 
     #[test]
@@ -1790,5 +2331,177 @@ mod tests {
             .pointer("/contributions/0/clients/0/modelId")
             .is_some());
         assert!(value.pointer("/years/0/range/start").is_some());
+    }
+
+    #[test]
+    fn hermes_sessions_use_started_at_and_stored_usage_fields() {
+        let db_path = hermes_test_db_path("started-at");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                model TEXT,
+                started_at REAL,
+                ended_at REAL,
+                message_count INTEGER,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                cache_write_tokens INTEGER,
+                reasoning_tokens INTEGER,
+                billing_provider TEXT,
+                estimated_cost_usd REAL,
+                actual_cost_usd REAL
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            r#"
+            INSERT INTO sessions (
+                id, model, started_at, ended_at, message_count,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                reasoning_tokens, billing_provider, estimated_cost_usd, actual_cost_usd
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            "#,
+            rusqlite::params![
+                "s1",
+                "gpt-5.5",
+                1_700_000_000.125_f64,
+                0.0_f64,
+                4_i32,
+                100_i64,
+                20_i64,
+                300_i64,
+                40_i64,
+                5_i64,
+                "openai-codex",
+                0.25_f64,
+                1.25_f64
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            r#"
+            INSERT INTO sessions (
+                id, model, started_at, ended_at, message_count,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                reasoning_tokens, billing_provider, estimated_cost_usd, actual_cost_usd
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            "#,
+            rusqlite::params![
+                "s2",
+                "claude-sonnet-4",
+                1_700_259_200.0_f64,
+                0.0_f64,
+                2_i32,
+                10_i64,
+                3_i64,
+                7_i64,
+                1_i64,
+                2_i64,
+                "anthropic",
+                0.75_f64,
+                0.0_f64
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let messages = parse_hermes_db(&db_path);
+        let first = messages
+            .iter()
+            .find(|m| m.dedup_key.as_deref() == Some("hermes:s1"))
+            .unwrap();
+        let second = messages
+            .iter()
+            .find(|m| m.dedup_key.as_deref() == Some("hermes:s2"))
+            .unwrap();
+
+        assert_eq!(first.provider_id, "openai");
+        assert_eq!(first.timestamp_ms, 1_700_000_000_125);
+        assert_eq!(first.tokens.reasoning, 5);
+        assert_eq!(first.messages, 4);
+        assert_eq!(first.cost, 1.25);
+
+        assert_eq!(second.provider_id, "anthropic");
+        assert_eq!(second.timestamp_ms, 1_700_259_200_000);
+        assert_eq!(second.tokens.reasoning, 2);
+        assert_eq!(second.messages, 2);
+        assert_eq!(second.cost, 0.75);
+
+        let payload = build_payload(messages);
+        let dates: BTreeSet<_> = payload.contributions.iter().map(|c| &c.date).collect();
+        assert_eq!(dates.len(), 2);
+
+        let _ = fs::remove_file(&db_path);
+        if let Some(parent) = db_path.parent() {
+            let _ = fs::remove_dir(parent);
+        }
+    }
+
+    #[test]
+    fn hermes_parser_tolerates_minimal_session_schema() {
+        let db_path = hermes_test_db_path("minimal");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                model TEXT,
+                started_at REAL,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_read_tokens INTEGER,
+                cache_write_tokens INTEGER
+            );
+            INSERT INTO sessions (
+                id, model, started_at, input_tokens, output_tokens,
+                cache_read_tokens, cache_write_tokens
+            ) VALUES ('s1', 'gpt-5.5', 1700000000, 1, 2, 3, 4);
+            "#,
+        )
+        .unwrap();
+        drop(conn);
+
+        let messages = parse_hermes_db(&db_path);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].timestamp_ms, 1_700_000_000_000);
+        assert_eq!(messages[0].tokens.total(), 10);
+
+        let _ = fs::remove_file(&db_path);
+        if let Some(parent) = db_path.parent() {
+            let _ = fs::remove_dir(parent);
+        }
+    }
+
+    fn hermes_test_db_path(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "tokcat-hermes-{}-{}-{}",
+            name,
+            std::process::id(),
+            now_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir.join("state.db")
+    }
+
+    fn codex_test_jsonl_path(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "tokcat-codex-{}-{}-{}",
+            name,
+            std::process::id(),
+            now_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir.join("session.jsonl")
+    }
+
+    fn cleanup_temp_file(path: &Path) {
+        let _ = fs::remove_file(path);
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir(parent);
+        }
     }
 }

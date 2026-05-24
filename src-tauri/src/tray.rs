@@ -6,8 +6,12 @@ use tauri::{
     WebviewWindow,
 };
 
-const POPOVER_W: f64 = 640.0;
-const POPOVER_H: f64 = 620.0;
+pub const POPOVER_W: f64 = 640.0;
+pub const POPOVER_DEFAULT_H: f64 = 620.0;
+pub const POPOVER_MIN_H: f64 = 420.0;
+pub const POPOVER_MAX_H: f64 = 1200.0;
+pub const POPOVER_SCREEN_MARGIN: f64 = 8.0;
+const POPOVER_TRAY_GAP: f64 = 6.0;
 
 pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Open Tokcat", true, None::<&str>)?;
@@ -15,8 +19,13 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let refresh = MenuItem::with_id(app, "refresh", "Refresh Now", true, Some("Cmd+R"))?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let about = MenuItem::with_id(app, "about", "About Tokcat", true, None::<&str>)?;
-    let check_update =
-        MenuItem::with_id(app, "check-update", "Check for Updates…", true, None::<&str>)?;
+    let check_update = MenuItem::with_id(
+        app,
+        "check-update",
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Tokcat", true, Some("Cmd+Q"))?;
     let menu = Menu::with_items(
@@ -77,6 +86,7 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                         let _ = position_window_under_tray(tray, &w);
                         let _ = w.show();
                         let _ = w.set_focus();
+                        let _ = app.emit("popover-shown", ());
                     }
                 }
             }
@@ -92,6 +102,7 @@ fn show_popover<R: Runtime>(app: &AppHandle<R>) {
         }
         let _ = w.show();
         let _ = w.set_focus();
+        let _ = app.emit("popover-shown", ());
     }
 }
 
@@ -114,7 +125,13 @@ fn position_window_under_tray<R: Runtime>(
 
     // Center popover horizontally under the tray icon
     let mut x = tray_x_logical + (tray_w_logical - POPOVER_W) / 2.0;
-    let y = tray_y_logical + tray_h_logical + 6.0;
+    let y = tray_y_logical + tray_h_logical + POPOVER_TRAY_GAP;
+    let mut h = window
+        .outer_size()
+        .ok()
+        .map(|size| size.height as f64 / scale)
+        .unwrap_or(POPOVER_DEFAULT_H)
+        .clamp(POPOVER_MIN_H, POPOVER_MAX_H);
 
     // Clamp to monitor bounds
     if let Ok(Some(monitor)) = window.current_monitor() {
@@ -122,7 +139,9 @@ fn position_window_under_tray<R: Runtime>(
         let m_size = monitor.size();
         let m_scale = monitor.scale_factor();
         let m_x = m_pos.x as f64 / m_scale;
+        let m_y = m_pos.y as f64 / m_scale;
         let m_w = m_size.width as f64 / m_scale;
+        let m_h = m_size.height as f64 / m_scale;
         let max_x = m_x + m_w - POPOVER_W - 8.0;
         let min_x = m_x + 8.0;
         if x > max_x {
@@ -131,9 +150,13 @@ fn position_window_under_tray<R: Runtime>(
         if x < min_x {
             x = min_x;
         }
+        let available_h = m_y + m_h - y - POPOVER_SCREEN_MARGIN;
+        if available_h.is_finite() && available_h > 0.0 {
+            h = h.min(available_h).max(POPOVER_MIN_H.min(available_h));
+        }
     }
 
-    let _ = window.set_size(tauri::LogicalSize::new(POPOVER_W, POPOVER_H));
+    let _ = window.set_size(tauri::LogicalSize::new(POPOVER_W, h));
     window.set_position(LogicalPosition::new(x, y))?;
     Ok(())
 }
