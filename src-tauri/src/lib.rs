@@ -13,7 +13,7 @@ use std::time::Duration;
 use tauri::{async_runtime, Emitter, Manager};
 use usage_tail::TraceBucket;
 
-const REFRESH_SECS: u64 = 180;
+const REFRESH_SECS: u64 = 1800;
 const ONESHOT_MAX_AGE_SECS: u64 = 30;
 const TAIL_TICK_SECS: u64 = 5;
 const RATE_EMIT_SECS: u64 = 180;
@@ -184,7 +184,8 @@ fn spawn_refresh_loop(app: tauri::AppHandle, state: Arc<AppState>) {
     // The popover graph is still sourced from tokscale (years/contributions
     // payload, cost calc, etc.). Animation no longer depends on this loop —
     // usage_tail emits the rate signal at TAIL_TICK_SECS — so this is a
-    // steady 3-min refresh purely for the popover chart.
+    // steady 30-min refresh purely for the popover chart. Manual tray refresh
+    // (`refresh_graph`) still fetches on demand and bypasses the cache.
     async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(REFRESH_SECS)).await;
