@@ -90,10 +90,20 @@ html, body, #root {
 }
 
 .page {
+  height: 100%;
   padding: 14px 18px;
   display: flex;
   justify-content: center;
   align-items: flex-start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.page-content {
+  width: 100%;
+  max-width: 1280px;
+  flex: 0 0 auto;
 }
 
 /* No visible chrome: the contents float directly on the native vibrancy. */

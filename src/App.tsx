@@ -283,80 +283,99 @@ export default function App() {
   // card's row count changes as buckets come and go; without this the
   // window either crops the trace or shows trailing whitespace.
   const pageRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (!isTauri() || !pageRef.current) return
-    const el = pageRef.current
+    if (!isTauri() || !pageRef.current || !contentRef.current) return
+    const page = pageRef.current
+    const content = contentRef.current
     let raf = 0
+    let disposed = false
+    let unlistenShown: (() => void) | null = null
     const push = () => {
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(async () => {
-        const h = el.getBoundingClientRect().height
+        const pageStyle = getComputedStyle(page)
+        const verticalPadding =
+          (parseFloat(pageStyle.paddingTop) || 0) + (parseFloat(pageStyle.paddingBottom) || 0)
+        const h = content.getBoundingClientRect().height + verticalPadding
         try {
           const { invoke } = await import('@tauri-apps/api/core')
-          await invoke('set_popover_height', { height: Math.ceil(h) })
+          await invoke('set_popover_height', { height: Math.ceil(h + 2) })
         } catch {}
       })
     }
     push()
     const ro = new ResizeObserver(push)
-    ro.observe(el)
+    ro.observe(content)
+    ;(async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event')
+        const unlisten = await listen('popover-shown', () => push())
+        if (disposed) unlisten()
+        else unlistenShown = unlisten
+      } catch {}
+    })()
     return () => {
+      disposed = true
       cancelAnimationFrame(raf)
       ro.disconnect()
+      if (unlistenShown) unlistenShown()
     }
-  }, [trace.length, stats?.totalTokens, view, settings.trayMode])
+  }, [trace.length, stats?.totalTokens, view, settings.trayMode, settings.detailedTrace])
 
   return (
     <div className="page" ref={pageRef}>
-      <Panel>
-        {!payload && !error && <div className="loading">Loading…</div>}
-        {error && <div className="error">Error: {error}</div>}
-        {payload && stats && grid && selected && (
-          <>
-            <HeaderBar
-              totalTokens={stats.totalTokens}
-              year={year}
-              years={allYears}
-              onYearChange={setYear}
-              theme={theme}
-              onThemeChange={(t) => setTheme(t as ThemeName)}
-              view={view}
-              onViewChange={setView}
-              onRefresh={() => setRefreshTick(t => t + 1)}
-              onOpenSettings={() => setSettingsOpen(true)}
-            />
-            <FilterChips presentClients={presentClients} selected={selected} onToggle={toggleClient} />
-            <InnerCard>
-              <div className="card-grid">
-                <div className="card-graph" key={view}>
-                  {view === '3D' ? (
-                    <ContributionGraph3D
-                      grid={grid}
-                      activeLight={palette.graphLight}
-                      activeDark={palette.graphDark}
-                      accent={mode.accent}
-                    />
-                  ) : (
-                    <ContributionGraph2D grid={grid} colorRgb={palette.graph2dRgb} />
-                  )}
-                </div>
-                {view === '3D' && (
-                  <div className="overlay-tr">
-                    <TokenUsageCard stats={stats} />
-                    <div className="overlay-avg">
-                      Average: <span className="overlay-avg-num">{formatCost(stats.averagePerDay)}</span> / day
-                    </div>
+      <div className="page-content" ref={contentRef}>
+        <Panel>
+          {!payload && !error && <div className="loading">Loading…</div>}
+          {error && <div className="error">Error: {error}</div>}
+          {payload && stats && grid && selected && (
+            <>
+              <HeaderBar
+                totalTokens={stats.totalTokens}
+                year={year}
+                years={allYears}
+                onYearChange={setYear}
+                theme={theme}
+                onThemeChange={(t) => setTheme(t as ThemeName)}
+                view={view}
+                onViewChange={setView}
+                onRefresh={() => setRefreshTick(t => t + 1)}
+                onOpenSettings={() => setSettingsOpen(true)}
+              />
+              <FilterChips presentClients={presentClients} selected={selected} onToggle={toggleClient} />
+              <InnerCard>
+                <div className="card-grid">
+                  <div className="card-graph" key={view}>
+                    {view === '3D' ? (
+                      <ContributionGraph3D
+                        grid={grid}
+                        activeLight={palette.graphLight}
+                        activeDark={palette.graphDark}
+                        accent={mode.accent}
+                      />
+                    ) : (
+                      <ContributionGraph2D grid={grid} colorRgb={palette.graph2dRgb} />
+                    )}
                   </div>
-                )}
-                <div className="overlay-bl">
-                  <StreaksCard longest={stats.streaks.longest} current={stats.streaks.current} />
+                  {view === '3D' && (
+                    <div className="overlay-tr">
+                      <TokenUsageCard stats={stats} />
+                      <div className="overlay-avg">
+                        Average: <span className="overlay-avg-num">{formatCost(stats.averagePerDay)}</span> / day
+                      </div>
+                    </div>
+                  )}
+                  <div className="overlay-bl">
+                    <StreaksCard longest={stats.streaks.longest} current={stats.streaks.current} />
+                  </div>
                 </div>
-              </div>
-            </InnerCard>
-            <UsageTraceCard buckets={trace} windowSecs={600} detailed={settings.detailedTrace} />
-          </>
-        )}
-      </Panel>
+              </InnerCard>
+              <UsageTraceCard buckets={trace} windowSecs={600} detailed={settings.detailedTrace} />
+            </>
+          )}
+        </Panel>
+      </div>
       <SettingsPanel
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

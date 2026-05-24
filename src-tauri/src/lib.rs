@@ -139,10 +139,7 @@ fn set_animation_style(style: String, state: tauri::State<'_, Arc<AppState>>) {
 }
 
 #[tauri::command]
-fn get_usage_trace(
-    window_secs: i64,
-    state: tauri::State<'_, Arc<AppState>>,
-) -> Vec<TraceBucket> {
+fn get_usage_trace(window_secs: i64, state: tauri::State<'_, Arc<AppState>>) -> Vec<TraceBucket> {
     state.usage_trace(window_secs)
 }
 
@@ -153,11 +150,12 @@ fn get_tokens_per_min(state: tauri::State<'_, Arc<AppState>>) -> f32 {
 
 /// Resize the popover window so the trace card fits without trailing
 /// whitespace. Called from the frontend whenever the bucket count
-/// changes. Width is kept constant; height is clamped to a sensible
-/// minimum.
+/// changes. Width is kept constant; height is clamped to the popover's
+/// supported range and the visible monitor area.
 #[tauri::command]
 fn set_popover_height(height: f64, window: tauri::Window) -> Result<(), String> {
-    let h = height.clamp(420.0, 1200.0);
+    let requested = height.clamp(tray::POPOVER_MIN_H, tray::POPOVER_MAX_H);
+    let h = clamp_popover_height_to_visible_area(&window, requested);
     let current = window
         .outer_size()
         .map_err(|e| format!("outer_size: {}", e))?;
@@ -173,6 +171,31 @@ fn set_popover_height(height: f64, window: tauri::Window) -> Result<(), String> 
         .set_size(tauri::LogicalSize::new(logical_w, h))
         .map_err(|e| format!("set_size: {}", e))?;
     Ok(())
+}
+
+fn clamp_popover_height_to_visible_area(window: &tauri::Window, requested: f64) -> f64 {
+    let mut h = requested.clamp(tray::POPOVER_MIN_H, tray::POPOVER_MAX_H);
+    let Ok(position) = window.outer_position() else {
+        return h;
+    };
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return h;
+    };
+    let scale = monitor.scale_factor();
+    if !scale.is_finite() || scale <= 0.0 {
+        return h;
+    }
+
+    let monitor_pos = monitor.position();
+    let monitor_size = monitor.size();
+    let monitor_y = monitor_pos.y as f64 / scale;
+    let monitor_h = monitor_size.height as f64 / scale;
+    let y = position.y as f64 / scale;
+    let available_h = monitor_y + monitor_h - y - tray::POPOVER_SCREEN_MARGIN;
+    if available_h.is_finite() && available_h > 0.0 {
+        h = h.min(available_h).max(tray::POPOVER_MIN_H.min(available_h));
+    }
+    h
 }
 
 fn spawn_refresh_loop(app: tauri::AppHandle, state: Arc<AppState>) {
@@ -303,7 +326,10 @@ pub fn run() {
         tray::setup(&handle)?;
         #[cfg(target_os = "macos")]
         if let Err(e) = native_tray::init() {
-            log::warn!("native_tray::init failed, falling back to Tauri set_icon: {}", e);
+            log::warn!(
+                "native_tray::init failed, falling back to Tauri set_icon: {}",
+                e
+            );
         }
         // Standard menubar popover behavior: hide when the window loses focus
         // (e.g. user clicks another menubar app or anywhere outside Tokcat).

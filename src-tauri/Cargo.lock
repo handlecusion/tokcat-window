@@ -4111,7 +4111,7 @@ dependencies = [
 
 [[package]]
 name = "tokcat"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "chrono",
  "env_logger",
