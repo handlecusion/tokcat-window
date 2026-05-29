@@ -716,6 +716,9 @@ html, body, #root {
 .bar2d-stats {
   margin: 2px 0 12px;
 }
+.bar2d-stats .usage-cell {
+  text-align: center;
+}
 .bar2d-chart {
   position: relative;
 }
