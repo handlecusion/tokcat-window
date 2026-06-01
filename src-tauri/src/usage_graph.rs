@@ -1922,182 +1922,281 @@ fn default_model_for_provider(provider: &str) -> String {
     .to_string()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Price {
     input: f64,
     output: f64,
     cache_read: f64,
     cache_write: f64,
+    input_above_200k: Option<f64>,
+    output_above_200k: Option<f64>,
+    cache_read_above_200k: Option<f64>,
+    cache_write_above_200k: Option<f64>,
+    input_above_272k: Option<f64>,
+    output_above_272k: Option<f64>,
+    cache_read_above_272k: Option<f64>,
+}
+
+impl Price {
+    fn new(input: f64, output: f64, cache_read: f64, cache_write: f64) -> Self {
+        Self {
+            input,
+            output,
+            cache_read,
+            cache_write,
+            input_above_200k: None,
+            output_above_200k: None,
+            cache_read_above_200k: None,
+            cache_write_above_200k: None,
+            input_above_272k: None,
+            output_above_272k: None,
+            cache_read_above_272k: None,
+        }
+    }
+
+    fn above_200k(mut self, input: f64, output: f64, cache_read: f64, cache_write: f64) -> Self {
+        self.input_above_200k = Some(input);
+        self.output_above_200k = Some(output);
+        self.cache_read_above_200k = Some(cache_read);
+        self.cache_write_above_200k = Some(cache_write);
+        self
+    }
+
+    fn above_272k(mut self, input: f64, output: f64, cache_read: f64) -> Self {
+        self.input_above_272k = Some(input);
+        self.output_above_272k = Some(output);
+        self.cache_read_above_272k = Some(cache_read);
+        self
+    }
 }
 
 fn estimate_cost(model: &str, provider: &str, tokens: &TokenBreakdown) -> f64 {
     let price = bundled_price(model, provider);
-    let input = tokens.input as f64 * price.input;
-    let output = (tokens.output + tokens.reasoning) as f64 * price.output;
-    let cache_read = tokens.cache_read as f64 * price.cache_read;
-    let cache_write = tokens.cache_write as f64 * price.cache_write;
+    let input = tiered_cost_per_million(
+        tokens.input,
+        price.input,
+        &[
+            (200_000.0, price.input_above_200k),
+            (272_000.0, price.input_above_272k),
+        ],
+    );
+    let output = tiered_cost_per_million(
+        tokens.output.max(0).saturating_add(tokens.reasoning.max(0)),
+        price.output,
+        &[
+            (200_000.0, price.output_above_200k),
+            (272_000.0, price.output_above_272k),
+        ],
+    );
+    let cache_read = tiered_cost_per_million(
+        tokens.cache_read,
+        price.cache_read,
+        &[
+            (200_000.0, price.cache_read_above_200k),
+            (272_000.0, price.cache_read_above_272k),
+        ],
+    );
+    let cache_write = tiered_cost_per_million(
+        tokens.cache_write,
+        price.cache_write,
+        &[(200_000.0, price.cache_write_above_200k)],
+    );
     (input + output + cache_read + cache_write) / 1_000_000.0
 }
 
+fn tiered_cost_per_million(tokens: i64, base_price: f64, tiers: &[(f64, Option<f64>)]) -> f64 {
+    let tokens = tokens.max(0) as f64;
+    let mut cost = 0.0;
+    let mut lower_bound = 0.0;
+    let mut active_price = base_price.max(0.0);
+
+    for (threshold, tier_price) in tiers {
+        let Some(tier_price) = tier_price.filter(|v| v.is_finite() && *v >= 0.0) else {
+            continue;
+        };
+        if !threshold.is_finite() || *threshold <= lower_bound {
+            continue;
+        }
+        if tokens <= *threshold {
+            return cost + (tokens - lower_bound).max(0.0) * active_price;
+        }
+        cost += (*threshold - lower_bound) * active_price;
+        lower_bound = *threshold;
+        active_price = tier_price;
+    }
+
+    cost + (tokens - lower_bound).max(0.0) * active_price
+}
+
 fn bundled_price(model: &str, provider: &str) -> Price {
+    // Snapshot from LiteLLM/models.dev/OpenRouter-style pricing data; Tokcat
+    // keeps this bundled to avoid adding network reads to local usage scans.
     let m = model.to_lowercase();
-    let normalized = m.replace('.', "-");
+    let normalized = m.replace(['.', '_', ' '], "-");
+    let terminal = normalized.rsplit('/').next().unwrap_or(&normalized);
+
+    if normalized.contains("opus-4-6-fast") || normalized.contains("opus-4-7-fast") {
+        return Price::new(30.0, 150.0, 3.0, 37.5);
+    }
+    if normalized.contains("opus-4-8-fast") {
+        return Price::new(10.0, 50.0, 1.0, 12.5);
+    }
     if normalized.contains("opus-4-5")
         || normalized.contains("opus-4-6")
         || normalized.contains("opus-4-7")
+        || normalized.contains("opus-4-8")
     {
-        return Price {
-            input: 5.0,
-            output: 25.0,
-            cache_read: 0.5,
-            cache_write: 6.25,
-        };
+        return Price::new(5.0, 25.0, 0.5, 6.25);
     }
     if m.contains("opus") {
-        return Price {
-            input: 15.0,
-            output: 75.0,
-            cache_read: 1.5,
-            cache_write: 18.75,
-        };
+        return Price::new(15.0, 75.0, 1.5, 18.75);
     }
     if normalized.contains("haiku-4-5") {
-        return Price {
-            input: 1.0,
-            output: 5.0,
-            cache_read: 0.1,
-            cache_write: 1.25,
-        };
+        return Price::new(1.0, 5.0, 0.1, 1.25);
     }
     if m.contains("haiku") {
-        return Price {
-            input: 0.8,
-            output: 4.0,
-            cache_read: 0.08,
-            cache_write: 1.0,
-        };
+        return Price::new(0.8, 4.0, 0.08, 1.0);
+    }
+    if normalized.contains("sonnet-4") {
+        return Price::new(3.0, 15.0, 0.3, 3.75).above_200k(6.0, 22.5, 0.6, 7.5);
+    }
+    if normalized.contains("sonnet-3-5") || normalized.contains("3-5-sonnet") {
+        return Price::new(3.0, 15.0, 0.3, 3.75).above_200k(6.0, 30.0, 0.6, 7.5);
     }
     if m.contains("sonnet") || m.contains("claude") {
-        return Price {
-            input: 3.0,
-            output: 15.0,
-            cache_read: 0.3,
-            cache_write: 3.75,
-        };
+        return Price::new(3.0, 15.0, 0.3, 3.75);
+    }
+    if terminal.contains("gpt-4o-2024-05-13") {
+        return Price::new(5.0, 15.0, 0.0, 0.0);
+    }
+    if terminal.contains("gpt-4o-mini") {
+        return Price::new(0.15, 0.6, 0.075, 0.0);
     }
     if m.contains("gpt-4o") {
-        return Price {
-            input: 2.5,
-            output: 10.0,
-            cache_read: 1.25,
-            cache_write: 2.5,
-        };
+        return Price::new(2.5, 10.0, 1.25, 0.0);
     }
-    if normalized.starts_with("gpt-5-5") || normalized.contains("gpt-5-5-codex") {
-        return Price {
-            input: 5.0,
-            output: 30.0,
-            cache_read: 0.5,
-            cache_write: 0.0,
-        };
+    if terminal.contains("gpt-5-5-pro") || terminal.contains("gpt-5-4-pro") {
+        return Price::new(30.0, 180.0, 0.0, 0.0).above_272k(60.0, 270.0, 0.0);
     }
-    if normalized.starts_with("gpt-5-4") || normalized.contains("gpt-5-4-codex") {
-        return Price {
-            input: 2.5,
-            output: 15.0,
-            cache_read: 0.25,
-            cache_write: 0.0,
-        };
+    if terminal.contains("gpt-5-2-pro") {
+        return Price::new(21.0, 168.0, 0.0, 0.0);
     }
-    if normalized.starts_with("gpt-5-3") || normalized.contains("gpt-5-3-codex") {
-        return Price {
-            input: 1.75,
-            output: 14.0,
-            cache_read: 0.175,
-            cache_write: 0.0,
-        };
+    if terminal.starts_with("gpt-5-pro") {
+        return Price::new(15.0, 120.0, 0.0, 0.0);
     }
-    if normalized.starts_with("gpt-5-2") || normalized.contains("gpt-5-2-codex") {
-        return Price {
-            input: 1.75,
-            output: 14.0,
-            cache_read: 0.175,
-            cache_write: 0.0,
-        };
+    if terminal.contains("gpt-5-4-mini") {
+        return Price::new(0.75, 4.5, 0.075, 0.0);
     }
-    if m.starts_with("gpt-5") || m.contains("codex") {
-        return Price {
-            input: 1.25,
-            output: 10.0,
-            cache_read: 0.125,
-            cache_write: 0.0,
-        };
+    if terminal.contains("gpt-5-4-nano") {
+        return Price::new(0.2, 1.25, 0.02, 0.0);
     }
-    if m.starts_with("o3") || m.starts_with("o4") {
-        return Price {
-            input: 10.0,
-            output: 40.0,
-            cache_read: 2.5,
-            cache_write: 10.0,
-        };
+    if terminal.starts_with("gpt-5-5") || terminal.contains("gpt-5-5-codex") {
+        return Price::new(5.0, 30.0, 0.5, 0.0).above_272k(10.0, 45.0, 1.0);
     }
-    if normalized.contains("glm-4-7-free") {
-        return Price {
-            input: 0.6,
-            output: 2.2,
-            cache_read: 0.11,
-            cache_write: 0.0,
-        };
+    if terminal.starts_with("gpt-5-4") || terminal.contains("gpt-5-4-codex") {
+        return Price::new(2.5, 15.0, 0.25, 0.0).above_272k(5.0, 22.5, 0.5);
     }
-    if normalized.contains("kimi-k2-5-free") {
-        return Price {
-            input: 0.6,
-            output: 3.0,
-            cache_read: 0.1,
-            cache_write: 0.0,
-        };
+    if terminal.starts_with("gpt-5-3") || terminal.contains("gpt-5-3-codex") {
+        return Price::new(1.75, 14.0, 0.175, 0.0);
+    }
+    if terminal.starts_with("gpt-5-2") || terminal.contains("gpt-5-2-codex") {
+        return Price::new(1.75, 14.0, 0.175, 0.0);
+    }
+    if terminal.contains("gpt-5-1-codex-mini") || terminal.starts_with("gpt-5-mini") {
+        return Price::new(0.25, 2.0, 0.025, 0.0);
+    }
+    if terminal.starts_with("gpt-5-nano") {
+        return Price::new(0.05, 0.4, 0.005, 0.0);
+    }
+    if terminal.starts_with("gpt-5") || terminal.contains("codex") || m.contains("codex") {
+        return Price::new(1.25, 10.0, 0.125, 0.0);
+    }
+    if terminal.starts_with("o3-pro") {
+        return Price::new(20.0, 80.0, 0.0, 0.0);
+    }
+    if terminal.starts_with("o3-mini") {
+        return Price::new(1.1, 4.4, 0.55, 0.0);
+    }
+    if terminal.starts_with("o3-deep-research") {
+        return Price::new(10.0, 40.0, 2.5, 0.0);
+    }
+    if terminal.starts_with("o3") {
+        return Price::new(2.0, 8.0, 0.5, 0.0);
+    }
+    if terminal.starts_with("o4-mini-deep-research") {
+        return Price::new(2.0, 8.0, 0.5, 0.0);
+    }
+    if terminal.starts_with("o4-mini") {
+        return Price::new(1.1, 4.4, 0.275, 0.0);
+    }
+    if terminal.starts_with("o4") {
+        return Price::new(2.0, 8.0, 0.5, 0.0);
+    }
+    if normalized.contains("glm-4-7-flashx") {
+        return Price::new(0.07, 0.4, 0.01, 0.0);
+    }
+    if normalized.contains("glm-4-7") {
+        return Price::new(0.6, 2.2, 0.11, 0.0);
+    }
+    if normalized.contains("kimi-k2-5") {
+        return Price::new(0.6, 3.0, 0.1, 0.0);
+    }
+    if terminal == "composer-1" {
+        return Price::new(1.25, 10.0, 0.125, 0.0);
+    }
+    if terminal == "composer-1-5" {
+        return Price::new(3.5, 17.5, 0.35, 0.0);
+    }
+    if terminal == "composer-2" || terminal == "composer-2-5" {
+        return Price::new(0.5, 2.5, 0.2, 0.0);
+    }
+    if terminal == "composer-2-fast" || terminal == "composer-2-5-fast" {
+        return Price::new(1.5, 7.5, 0.35, 0.0);
+    }
+    if normalized.contains("gemini-3-5-flash") {
+        return Price::new(1.5, 9.0, 0.15, 0.0);
+    }
+    if normalized.contains("gemini-3-1-flash-lite") {
+        return Price::new(0.25, 1.5, 0.025, 0.0);
+    }
+    if normalized.contains("gemini-3-1-pro") || normalized.contains("gemini-3-pro") {
+        return Price::new(2.0, 12.0, 0.2, 0.0).above_200k(4.0, 18.0, 0.4, 0.0);
+    }
+    if normalized.contains("gemini-3-flash") {
+        return Price::new(0.5, 3.0, 0.05, 0.0);
+    }
+    if normalized.contains("gemini-2-5-flash-lite") {
+        return Price::new(0.1, 0.4, 0.01, 0.0);
+    }
+    if normalized.contains("gemini-2-5-flash") {
+        return Price::new(0.3, 2.5, 0.03, 0.0);
+    }
+    if normalized.contains("gemini-2-0-flash-lite") {
+        return Price::new(0.075, 0.3, 0.0, 0.0);
+    }
+    if normalized.contains("gemini-2-0-flash") {
+        return Price::new(0.1, 0.4, 0.025, 0.0);
+    }
+    if normalized.contains("gemini-2-5-pro") {
+        return Price::new(1.25, 10.0, 0.125, 0.0).above_200k(2.5, 15.0, 0.25, 0.0);
+    }
+    if normalized.contains("gemini-flash-lite-latest") {
+        return Price::new(0.1, 0.4, 0.025, 0.0);
+    }
+    if normalized.contains("gemini-flash-latest") {
+        return Price::new(0.3, 2.5, 0.075, 0.0);
     }
     if m.contains("gemini") && m.contains("flash") {
-        return Price {
-            input: 0.3,
-            output: 2.5,
-            cache_read: 0.075,
-            cache_write: 0.3,
-        };
+        return Price::new(0.3, 2.5, 0.075, 0.0);
     }
     if m.contains("gemini") {
-        return Price {
-            input: 1.25,
-            output: 10.0,
-            cache_read: 0.3125,
-            cache_write: 1.25,
-        };
+        return Price::new(1.25, 10.0, 0.125, 0.0);
     }
     match provider {
-        "anthropic" => Price {
-            input: 3.0,
-            output: 15.0,
-            cache_read: 0.3,
-            cache_write: 3.75,
-        },
-        "openai" => Price {
-            input: 1.25,
-            output: 10.0,
-            cache_read: 0.125,
-            cache_write: 0.0,
-        },
-        "google" => Price {
-            input: 1.25,
-            output: 10.0,
-            cache_read: 0.3125,
-            cache_write: 1.25,
-        },
-        _ => Price {
-            input: 0.0,
-            output: 0.0,
-            cache_read: 0.0,
-            cache_write: 0.0,
-        },
+        "anthropic" => Price::new(3.0, 15.0, 0.3, 3.75),
+        "openai" => Price::new(1.25, 10.0, 0.125, 0.0),
+        "google" => Price::new(1.25, 10.0, 0.125, 0.0),
+        _ => Price::new(0.0, 0.0, 0.0, 0.0),
     }
 }
 
@@ -2111,6 +2210,16 @@ mod tests {
         assert!((actual.output - expected.output).abs() < f64::EPSILON);
         assert!((actual.cache_read - expected.cache_read).abs() < f64::EPSILON);
         assert!((actual.cache_write - expected.cache_write).abs() < f64::EPSILON);
+        assert_eq!(actual.input_above_200k, expected.input_above_200k);
+        assert_eq!(actual.output_above_200k, expected.output_above_200k);
+        assert_eq!(actual.cache_read_above_200k, expected.cache_read_above_200k);
+        assert_eq!(
+            actual.cache_write_above_200k,
+            expected.cache_write_above_200k
+        );
+        assert_eq!(actual.input_above_272k, expected.input_above_272k);
+        assert_eq!(actual.output_above_272k, expected.output_above_272k);
+        assert_eq!(actual.cache_read_above_272k, expected.cache_read_above_272k);
     }
 
     #[test]
@@ -2118,42 +2227,37 @@ mod tests {
         assert_price(
             "claude-opus-4-7",
             "anthropic",
-            Price {
-                input: 5.0,
-                output: 25.0,
-                cache_read: 0.5,
-                cache_write: 6.25,
-            },
+            Price::new(5.0, 25.0, 0.5, 6.25),
+        );
+        assert_price(
+            "claude-opus-4.8",
+            "anthropic",
+            Price::new(5.0, 25.0, 0.5, 6.25),
+        );
+        assert_price(
+            "anthropic/claude-opus-4.8-fast",
+            "openrouter",
+            Price::new(10.0, 50.0, 1.0, 12.5),
         );
         assert_price(
             "claude-opus-4-5-20251101",
             "anthropic",
-            Price {
-                input: 5.0,
-                output: 25.0,
-                cache_read: 0.5,
-                cache_write: 6.25,
-            },
+            Price::new(5.0, 25.0, 0.5, 6.25),
         );
         assert_price(
             "claude-opus-4-1",
             "anthropic",
-            Price {
-                input: 15.0,
-                output: 75.0,
-                cache_read: 1.5,
-                cache_write: 18.75,
-            },
+            Price::new(15.0, 75.0, 1.5, 18.75),
         );
         assert_price(
             "claude-haiku-4-5-20251001",
             "anthropic",
-            Price {
-                input: 1.0,
-                output: 5.0,
-                cache_read: 0.1,
-                cache_write: 1.25,
-            },
+            Price::new(1.0, 5.0, 0.1, 1.25),
+        );
+        assert_price(
+            "claude-sonnet-4-5",
+            "anthropic",
+            Price::new(3.0, 15.0, 0.3, 3.75).above_200k(6.0, 22.5, 0.6, 7.5),
         );
     }
 
@@ -2162,57 +2266,90 @@ mod tests {
         assert_price(
             "gpt-5.5",
             "openai",
-            Price {
-                input: 5.0,
-                output: 30.0,
-                cache_read: 0.5,
-                cache_write: 0.0,
-            },
+            Price::new(5.0, 30.0, 0.5, 0.0).above_272k(10.0, 45.0, 1.0),
         );
         assert_price(
             "gpt-5.3-codex",
             "openai",
-            Price {
-                input: 1.75,
-                output: 14.0,
-                cache_read: 0.175,
-                cache_write: 0.0,
-            },
+            Price::new(1.75, 14.0, 0.175, 0.0),
         );
         assert_price(
             "gpt-5.1-codex-max",
             "openai",
-            Price {
-                input: 1.25,
-                output: 10.0,
-                cache_read: 0.125,
-                cache_write: 0.0,
-            },
+            Price::new(1.25, 10.0, 0.125, 0.0),
+        );
+        assert_price(
+            "openai/gpt-5.4-mini",
+            "openai",
+            Price::new(0.75, 4.5, 0.075, 0.0),
+        );
+        assert_price("gpt-5.2-pro", "openai", Price::new(21.0, 168.0, 0.0, 0.0));
+        assert_price("gpt-5-nano", "openai", Price::new(0.05, 0.4, 0.005, 0.0));
+    }
+
+    #[test]
+    fn bundled_price_matches_current_openai_o_family() {
+        assert_price("o3", "openai", Price::new(2.0, 8.0, 0.5, 0.0));
+        assert_price(
+            "o3-deep-research",
+            "openai",
+            Price::new(10.0, 40.0, 2.5, 0.0),
+        );
+        assert_price("o3-mini", "openai", Price::new(1.1, 4.4, 0.55, 0.0));
+        assert_price("o3-pro", "openai", Price::new(20.0, 80.0, 0.0, 0.0));
+        assert_price("o4-mini", "openai", Price::new(1.1, 4.4, 0.275, 0.0));
+    }
+
+    #[test]
+    fn bundled_price_matches_current_gemini_family() {
+        assert_price(
+            "gemini-2.5-flash",
+            "google",
+            Price::new(0.3, 2.5, 0.03, 0.0),
+        );
+        assert_price(
+            "gemini-3.1-pro-preview",
+            "google",
+            Price::new(2.0, 12.0, 0.2, 0.0).above_200k(4.0, 18.0, 0.4, 0.0),
+        );
+        assert_price(
+            "gemini-3.5-flash",
+            "google",
+            Price::new(1.5, 9.0, 0.15, 0.0),
         );
     }
 
     #[test]
-    fn bundled_price_matches_openrouter_free_suffix_models() {
+    fn bundled_price_matches_current_openrouter_free_suffix_models() {
+        assert_price("glm-4.7-free", "opencode", Price::new(0.6, 2.2, 0.11, 0.0));
+        assert_price("glm-4.7", "opencode", Price::new(0.6, 2.2, 0.11, 0.0));
+        assert_price("kimi-k2.5-free", "opencode", Price::new(0.6, 3.0, 0.1, 0.0));
+        assert_price("kimi-k2.5", "opencode", Price::new(0.6, 3.0, 0.1, 0.0));
+    }
+
+    #[test]
+    fn bundled_price_matches_current_cursor_composer_overrides() {
+        assert_price("composer 1.5", "cursor", Price::new(3.5, 17.5, 0.35, 0.0));
         assert_price(
-            "glm-4.7-free",
-            "opencode",
-            Price {
-                input: 0.6,
-                output: 2.2,
-                cache_read: 0.11,
-                cache_write: 0.0,
-            },
+            "composer-2.5-fast",
+            "cursor",
+            Price::new(1.5, 7.5, 0.35, 0.0),
         );
-        assert_price(
-            "kimi-k2.5-free",
-            "opencode",
-            Price {
-                input: 0.6,
-                output: 3.0,
-                cache_read: 0.1,
-                cache_write: 0.0,
-            },
-        );
+    }
+
+    #[test]
+    fn estimate_cost_splits_tiered_prices() {
+        let tokens = TokenBreakdown {
+            input: 300_000,
+            output: 100_000,
+            cache_read: 300_000,
+            cache_write: 0,
+            reasoning: 0,
+        };
+        let cost = estimate_cost("gpt-5.5", "openai", &tokens);
+        // input: 272k * 5 + 28k * 10, output: 100k * 30,
+        // cache read: 272k * 0.5 + 28k * 1, all divided by 1M.
+        assert!((cost - 4.804).abs() < 0.000_001);
     }
 
     #[test]
