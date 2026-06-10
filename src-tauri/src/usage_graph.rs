@@ -1890,6 +1890,7 @@ fn infer_provider(model: &str) -> &'static str {
         || model.contains("sonnet")
         || model.contains("opus")
         || model.contains("haiku")
+        || model.contains("fable")
     {
         "anthropic"
     } else if model.starts_with("gpt-")
@@ -2035,6 +2036,9 @@ fn bundled_price(model: &str, provider: &str) -> Price {
     let normalized = m.replace(['.', '_', ' '], "-");
     let terminal = normalized.rsplit('/').next().unwrap_or(&normalized);
 
+    if normalized.contains("fable") {
+        return Price::new(10.0, 50.0, 1.0, 12.5);
+    }
     if normalized.contains("opus-4-6-fast") || normalized.contains("opus-4-7-fast") {
         return Price::new(30.0, 150.0, 3.0, 37.5);
     }
@@ -2224,6 +2228,16 @@ mod tests {
 
     #[test]
     fn bundled_price_matches_current_claude_model_families() {
+        assert_price(
+            "claude-fable-5",
+            "anthropic",
+            Price::new(10.0, 50.0, 1.0, 12.5),
+        );
+        assert_price(
+            "claude-fable-5[1m]",
+            "anthropic",
+            Price::new(10.0, 50.0, 1.0, 12.5),
+        );
         assert_price(
             "claude-opus-4-7",
             "anthropic",
