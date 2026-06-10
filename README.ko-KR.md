@@ -1,4 +1,16 @@
-<h1 align="center">Tokcat</h1>
+<h1 align="center">Tokcat Windows</h1>
+
+> Tokcat Windows 포트 작업 repo입니다.
+>
+> macOS 정식 repo는
+> [`handlecusion/tokcat`](https://github.com/handlecusion/tokcat)입니다. 이 repo는
+> Windows 빌드/릴리스, installer artifact, updater endpoint, Windows 구현 메모를
+> 소유합니다. 기준 문서는 [`docs/windows-port.md`](docs/windows-port.md)입니다.
+>
+> 현재 source는 macOS Tokcat 앱에서 시작했기 때문에 아래 기존 README에는 아직
+> upstream macOS 설명이 섞여 있습니다.
+
+## Upstream Tokcat README
 
 <p align="center">
   <strong>당신의 AI 토큰 사용량, macOS 메뉴바에서 살아 움직이게.</strong>
@@ -10,11 +22,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/handlecusion/tokcat/releases/latest"><img src="https://img.shields.io/github/v/release/handlecusion/tokcat?style=flat-square&color=blue" alt="Release"></a>
-  <a href="https://github.com/handlecusion/tokcat/stargazers"><img src="https://img.shields.io/github/stars/handlecusion/tokcat?style=flat-square" alt="Stars"></a>
+  <a href="https://github.com/handlecusion/tokcat-window/releases/latest"><img src="https://img.shields.io/github/v/release/handlecusion/tokcat-window?style=flat-square&color=blue" alt="Release"></a>
+  <a href="https://github.com/handlecusion/tokcat-window/stargazers"><img src="https://img.shields.io/github/stars/handlecusion/tokcat-window?style=flat-square" alt="Stars"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="MIT Licence"></a>
-  <img src="https://img.shields.io/badge/macOS-11%2B-black?style=flat-square&logo=apple" alt="macOS 11+">
-  <img src="https://img.shields.io/badge/Apple%20Silicon-arm64-success?style=flat-square" alt="Apple Silicon">
+  <img src="https://img.shields.io/badge/Windows-x64%20beta-0078D4?style=flat-square&logo=windows&logoColor=white" alt="Windows x64 beta">
   <img src="https://img.shields.io/badge/built%20with-Tauri%202-FFC131?style=flat-square&logo=tauri&logoColor=black" alt="Tauri 2">
 </p>
 
