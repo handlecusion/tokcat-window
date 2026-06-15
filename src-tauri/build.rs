@@ -125,9 +125,9 @@ fn generate_frames(icons_dir: &Path, manifest_dir: &Path, out_dir: &Path) -> Str
             let raw_name = f.replace(".png", ".rgba");
             let abs = rgba_out_dir.join(&raw_name).to_string_lossy().to_string();
             if i + 1 == frames.len() {
-                out.push_str(&format!("        _ => include_bytes!(\"{}\"),\n", abs));
+                out.push_str(&format!("        _ => include_bytes!(r#\"{}\"#),\n", abs));
             } else {
-                out.push_str(&format!("        {} => include_bytes!(\"{}\"),\n", i, abs));
+                out.push_str(&format!("        {} => include_bytes!(r#\"{}\"#),\n", i, abs));
             }
         }
         out.push_str("    }\n}\n\n");
