@@ -138,17 +138,16 @@ warnings remain unresolved.
 
 `src-tauri/tauri.conf.json`:
 
-- Change updater endpoint to `handlecusion/tokcat-window`.
-- Add Windows bundle target, likely `nsis` first.
+- Updater endpoint points to `handlecusion/tokcat-window`.
+- Windows bundle target is `nsis`.
 - Keep `createUpdaterArtifacts` enabled.
 - Add Windows signing config only after signing method chosen.
-- Re-check window config fields that are macOS-only or ignored on Windows:
-  `transparent`, `decorations`, `skipTaskbar`, `visibleOnAllWorkspaces`,
-  `windowEffects`.
+- Window effect uses Windows `mica`; `transparent`, `decorations`,
+  `skipTaskbar`, and tray placement still need runtime QA on real Windows.
 
 `src-tauri/Cargo.toml`:
 
-- Remove `macos-private-api` feature for Windows build path if it blocks build.
+- `macos-private-api` is removed from the default Tauri feature list.
 - Keep macOS-only dependencies under `cfg(target_os = "macos")`.
 - Add Windows-specific deps only when implementation needs native Windows API.
 - Re-evaluate vendored `tray-icon` patch. It exists for macOS performance; if it
@@ -156,16 +155,15 @@ warnings remain unresolved.
 
 `.github/workflows/release.yml`:
 
-- Replace macOS runner with `windows-latest`.
-- Remove DMG cleanup.
-- Remove Homebrew tap job.
-- Upload Windows installer, signature, and `latest.json`.
-- Validate package/Cargo/Tauri version match tag.
+- Runs on `windows-latest`.
+- Builds NSIS installer with Tauri updater artifacts.
+- Uploads Windows installer, signature, and `latest.json`.
+- Validates package/Cargo/Tauri version match tag.
 
 README:
 
 - Mark this repo as Windows port repo.
-- Do not keep macOS-only install instructions as primary Windows path.
+- Primary install path is GitHub Releases from `handlecusion/tokcat-window`.
 
 ## Implementation risks
 
@@ -212,6 +210,8 @@ must be tested separately. Do not claim parity until enable/disable survives:
 
 Many supported AI coding tools use different config/log paths across OSes.
 Windows port must verify each client path instead of assuming Unix home layout.
+The reader now falls back from `HOME` to `USERPROFILE`, and app-data style roots
+use `APPDATA`/`LOCALAPPDATA` where appropriate.
 
 Minimum first pass:
 
@@ -239,7 +239,7 @@ Simplest first phase: Windows repo publishes Windows-only `latest.json`.
 - Set `origin` to Windows repo and `upstream` to macOS repo.
 - Add this document and Windows repo agent guide.
 
-Exit: repo exists and documents ownership clearly.
+Exit: complete. Repo exists and documents ownership clearly.
 
 ### Phase 1: build discovery
 
@@ -247,7 +247,10 @@ Exit: repo exists and documents ownership clearly.
 - Capture first build blockers.
 - Fix only build blockers, not UX polish.
 
-Exit: `npx tauri build` produces a Windows installer artifact.
+Exit: code-level build discovery complete on macOS cross-build. `cargo xwin
+check --target x86_64-pc-windows-msvc` passes, and `npm run
+tauri:build:windows` produced a Windows PE executable and NSIS installer using
+`cargo-xwin`, `lld`, and `makensis`.
 
 ### Phase 2: installer release
 
@@ -256,7 +259,10 @@ Exit: `npx tauri build` produces a Windows installer artifact.
 - Generate `latest.json` with `windows-x86_64`.
 - Keep Authenticode optional for this phase, but document warning.
 
-Exit: clean GitHub Release can install app on Windows x64.
+Exit: release workflow exists and local cross-build produced
+`Tokcat_0.1.30_x64-setup.exe`, its `.sig`, and a Windows-only `latest.json`.
+First GitHub tag run must still prove upload in CI, and a real Windows machine
+must still prove install/runtime behavior.
 
 ### Phase 3: updater
 

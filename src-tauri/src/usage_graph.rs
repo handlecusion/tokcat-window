@@ -795,15 +795,22 @@ fn parse_cursor() -> Vec<UsageMessage> {
     };
     // Cursor's usage source is still the local compatibility cache produced by
     // older Tokcat/tokscale setups. Reading it avoids dropping historical data.
-    let root = home.join(".config").join("tokscale").join("cursor-cache");
-    collect_files(&root, |p| {
-        p.file_name().and_then(|s| s.to_str()).is_some_and(|name| {
-            name == "usage.csv" || (name.starts_with("usage.") && name.ends_with(".csv"))
+    let mut roots = vec![home.join(".config").join("tokscale").join("cursor-cache")];
+    if let Some(local_app_data) = local_app_data_dir() {
+        roots.push(local_app_data.join("tokscale").join("cursor-cache"));
+        roots.push(local_app_data.join("Tokscale").join("cursor-cache"));
+    }
+    roots
+        .into_iter()
+        .flat_map(|root| {
+            collect_files(&root, |p| {
+                p.file_name().and_then(|s| s.to_str()).is_some_and(|name| {
+                    name == "usage.csv" || (name.starts_with("usage.") && name.ends_with(".csv"))
+                })
+            })
         })
-    })
-    .into_iter()
-    .flat_map(|p| parse_cursor_file(&p))
-    .collect()
+        .flat_map(|p| parse_cursor_file(&p))
+        .collect()
 }
 
 fn parse_cursor_file(path: &Path) -> Vec<UsageMessage> {
@@ -1670,13 +1677,28 @@ fn collect_files_inner(root: &Path, pred: impl Fn(&Path) -> bool + Copy, out: &m
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 fn xdg_data_home(home: &Path) -> PathBuf {
+    if cfg!(target_os = "windows") {
+        return app_data_dir().unwrap_or_else(|| home.join("AppData").join("Roaming"));
+    }
     std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".local").join("share"))
+}
+
+fn app_data_dir() -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(PathBuf::from)
+}
+
+fn local_app_data_dir() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .or_else(|| home_dir().map(|home| home.join("AppData").join("Local")))
 }
 
 fn hermes_db_path() -> Option<PathBuf> {

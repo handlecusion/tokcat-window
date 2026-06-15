@@ -120,9 +120,9 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
-/// Hide the popover from the frontend (⌘W / Esc) and return focus to the
+/// Hide the popover from the frontend (Ctrl+W / Esc on Windows) and return focus to the
 /// previously-frontmost app. Routed through the same helper as the tray-click
-/// and Ctrl+Cmd+T toggle so every explicit dismiss behaves identically.
+/// and global toggle so every explicit dismiss behaves identically.
 #[tauri::command]
 fn hide_popover(app: tauri::AppHandle) {
     tray::hide_popover(&app);
@@ -302,16 +302,26 @@ fn spawn_usage_tail_loop(app: tauri::AppHandle, state: Arc<AppState>) {
     });
 }
 
+#[cfg(target_os = "macos")]
+fn global_toggle_modifiers() -> tauri_plugin_global_shortcut::Modifiers {
+    tauri_plugin_global_shortcut::Modifiers::CONTROL
+        | tauri_plugin_global_shortcut::Modifiers::SUPER
+}
+
+#[cfg(not(target_os = "macos"))]
+fn global_toggle_modifiers() -> tauri_plugin_global_shortcut::Modifiers {
+    tauri_plugin_global_shortcut::Modifiers::CONTROL | tauri_plugin_global_shortcut::Modifiers::ALT
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state = AppState::new();
     let state_clone = state.clone();
 
-    // Ctrl+Cmd+T toggles the popover from anywhere — registered in setup, fired
-    // by the plugin handler below. Shortcut is Copy, so the same value is reused
-    // for both the handler match and the setup-time registration.
-    use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
-    let toggle_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SUPER), Code::KeyT);
+    // Global tray popover toggle. Windows uses Ctrl+Alt+T to avoid the Windows
+    // logo key, while macOS keeps the upstream Ctrl+Cmd+T binding.
+    use tauri_plugin_global_shortcut::{Code, Shortcut, ShortcutState};
+    let toggle_shortcut = Shortcut::new(Some(global_toggle_modifiers()), Code::KeyT);
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
@@ -368,8 +378,8 @@ pub fn run() {
                 e
             );
         }
-        // Standard menubar popover behavior: hide when the window loses focus
-        // (e.g. user clicks another menubar app or anywhere outside Tokcat).
+        // Standard tray popover behavior: hide when the window loses focus
+        // (e.g. user clicks another app or anywhere outside Tokcat).
         // Skipped while a system dialog is in flight so an ask/message popup
         // stealing focus doesn't dismiss the window underneath it.
         if let Some(window) = handle.get_webview_window("main") {

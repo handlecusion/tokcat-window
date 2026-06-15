@@ -6,6 +6,7 @@ interface Props {
   active: string
   onChange: (tab: string) => void
   kbdHints?: boolean
+  shortcutPrefix?: string
 }
 
 function ClientMark({ id }: { id: string }) {
@@ -27,10 +28,10 @@ function ClientMark({ id }: { id: string }) {
   )
 }
 
-export function DashboardTabs({ clients, active, onChange, kbdHints }: Props) {
-  // ⌘1 = Overview, ⌘2… = clients, matching the keyboard handler in App. Only
-  // the first nine tabs get a hint since ⌘0 is unbound.
-  const hint = (idx: number) => (kbdHints && idx < 9 ? `⌘${idx + 1}` : null)
+export function DashboardTabs({ clients, active, onChange, kbdHints, shortcutPrefix = '⌘' }: Props) {
+  // Primary modifier + 1 = Overview, +2… = clients. Only first nine tabs get
+  // a hint since 0 is unbound.
+  const hint = (idx: number) => (kbdHints && idx < 9 ? `${shortcutPrefix}${idx + 1}` : null)
   return (
     <div className="dash-tabs" role="tablist" aria-label="Dashboard sections">
       <button

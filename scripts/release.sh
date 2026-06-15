@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
-# Build, sign, and publish a Tokcat release.
+# Build and publish a Tokcat Windows release.
 #
 # Usage:
 #   scripts/release.sh <version> "<release notes>"
 #
-# Example:
-#   scripts/release.sh 0.1.3 "Add auto-update support."
-#
 # Prerequisites:
-#   - gh CLI authenticated for handlecusion/tokcat
-#   - Updater private key at ~/.tauri/tokcat.key
+#   - gh CLI authenticated for handlecusion/tokcat-window
+#   - Updater private key at ~/.tauri/tokcat.key or
+#     TAURI_SIGNING_PRIVATE_KEY_PATH
 #   - package.json / Cargo.toml / tauri.conf.json already bumped to <version>
 #     and committed on main.
+#   - On non-Windows hosts, cargo-xwin available for cross-compiling.
 
 set -euo pipefail
 
@@ -32,69 +31,68 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Ensure version files match the requested version.
 PKG_VER="$(node -p "require('./package.json').version")"
-if [[ "$PKG_VER" != "$VERSION" ]]; then
-  echo "package.json version is $PKG_VER, expected $VERSION" >&2
+CARGO_VER="$(grep -E '^version = ' src-tauri/Cargo.toml | head -1 | sed -E 's/version = "([^"]+)"/\1/')"
+TAURI_VER="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+if [[ "$PKG_VER" != "$VERSION" || "$CARGO_VER" != "$VERSION" || "$TAURI_VER" != "$VERSION" ]]; then
+  echo "version mismatch: requested=$VERSION package.json=$PKG_VER Cargo.toml=$CARGO_VER tauri.conf.json=$TAURI_VER" >&2
   exit 1
 fi
 
 TAG="v$VERSION"
-BUNDLE_DIR="src-tauri/target/release/bundle"
-DMG="$BUNDLE_DIR/dmg/Tokcat_${VERSION}_aarch64.dmg"
-APP_TGZ="$BUNDLE_DIR/macos/Tokcat.app.tar.gz"
-APP_SIG="$BUNDLE_DIR/macos/Tokcat.app.tar.gz.sig"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    BUILD_CMD=(npx tauri build)
+    BUNDLE_DIR="src-tauri/target/release/bundle"
+    ;;
+  *)
+    BUILD_CMD=(npx tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc)
+    BUNDLE_DIR="src-tauri/target/x86_64-pc-windows-msvc/release/bundle"
+    ;;
+esac
 
-echo "==> Building release with updater artifacts"
+echo "==> Building Windows release with updater artifacts"
 TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_PATH")" \
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" \
-  pnpm tauri build
+  "${BUILD_CMD[@]}"
 
-for f in "$DMG" "$APP_TGZ" "$APP_SIG"; do
-  if [[ ! -f "$f" ]]; then
-    echo "expected artifact missing: $f" >&2
-    exit 1
-  fi
-done
+NSIS_DIR="$BUNDLE_DIR/nsis"
+mapfile -t INSTALLERS < <(find "$NSIS_DIR" -maxdepth 1 -type f -name '*.exe' | sort)
+if [[ "${#INSTALLERS[@]}" -ne 1 ]]; then
+  echo "expected exactly one NSIS installer in $NSIS_DIR, found ${#INSTALLERS[@]}" >&2
+  printf '%s\n' "${INSTALLERS[@]}" >&2
+  exit 1
+fi
 
-# Tauri's dmg bundler writes a hidden .VolumeIcon.icns into the disk image.
-# Users who have "show hidden files" enabled in Finder (Cmd+Shift+.) end up
-# seeing it next to the app, which looks like a stray cache file. Strip it.
-echo "==> Stripping .VolumeIcon.icns from $DMG"
-DMG_RW="${DMG%.dmg}.rw.dmg"
-DMG_MNT="$(mktemp -d)"
-hdiutil convert "$DMG" -format UDRW -o "$DMG_RW" -ov >/dev/null
-hdiutil attach -nobrowse -mountpoint "$DMG_MNT" "$DMG_RW" >/dev/null
-rm -f "$DMG_MNT/.VolumeIcon.icns"
-SetFile -a c "$DMG_MNT" 2>/dev/null || true
-hdiutil detach "$DMG_MNT" >/dev/null
-rmdir "$DMG_MNT" 2>/dev/null || true
-hdiutil convert "$DMG_RW" -format UDZO -imagekey zlib-level=9 -o "$DMG" -ov >/dev/null
-rm -f "$DMG_RW"
+INSTALLER="${INSTALLERS[0]}"
+SIG_FILE="${INSTALLER}.sig"
+if [[ ! -f "$SIG_FILE" ]]; then
+  echo "expected updater signature missing: $SIG_FILE" >&2
+  exit 1
+fi
 
-SIGNATURE="$(cat "$APP_SIG")"
+INSTALLER_NAME="$(basename "$INSTALLER")"
+SIGNATURE="$(cat "$SIG_FILE")"
 PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-DOWNLOAD_BASE="https://github.com/handlecusion/tokcat/releases/download/$TAG"
-
+DOWNLOAD_BASE="https://github.com/handlecusion/tokcat-window/releases/download/$TAG"
 LATEST_JSON="$BUNDLE_DIR/latest.json"
-cat > "$LATEST_JSON" <<EOF
-{
-  "version": "$VERSION",
-  "notes": $(printf '%s' "$NOTES" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'),
-  "pub_date": "$PUB_DATE",
-  "platforms": {
-    "darwin-aarch64": {
-      "signature": "$SIGNATURE",
-      "url": "$DOWNLOAD_BASE/Tokcat.app.tar.gz"
-    }
-  }
-}
-EOF
+
+node - "$VERSION" "$NOTES" "$PUB_DATE" "$SIGNATURE" "$DOWNLOAD_BASE/$INSTALLER_NAME" "$LATEST_JSON" <<'NODE'
+const fs = require('fs')
+const [version, notes, pubDate, signature, url, out] = process.argv.slice(2)
+fs.writeFileSync(out, JSON.stringify({
+  version,
+  notes,
+  pub_date: pubDate,
+  platforms: {
+    'windows-x86_64': { signature, url },
+  },
+}, null, 2))
+NODE
 
 echo "==> latest.json"
 cat "$LATEST_JSON"
 
-# Tag must already exist (or be created here). We assume the commit is pushed.
 if ! git rev-parse "$TAG" >/dev/null 2>&1; then
   echo "==> Tagging $TAG"
   git tag "$TAG"
@@ -103,11 +101,10 @@ fi
 
 echo "==> Creating GitHub release"
 gh release create "$TAG" \
-  "$DMG" \
-  "$APP_TGZ" \
-  "$APP_SIG" \
+  "$INSTALLER" \
+  "$SIG_FILE" \
   "$LATEST_JSON" \
-  --title "Tokcat $VERSION" \
+  --title "Tokcat Windows $VERSION" \
   --notes "$NOTES"
 
-echo "==> Done: https://github.com/handlecusion/tokcat/releases/tag/$TAG"
+echo "==> Done: https://github.com/handlecusion/tokcat-window/releases/tag/$TAG"

@@ -15,8 +15,8 @@ const POPOVER_TRAY_GAP: f64 = 6.0;
 
 pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Open Tokcat", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("Cmd+,"))?;
-    let refresh = MenuItem::with_id(app, "refresh", "Refresh Now", true, Some("Cmd+R"))?;
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some(settings_accel()))?;
+    let refresh = MenuItem::with_id(app, "refresh", "Refresh Now", true, Some(refresh_accel()))?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let about = MenuItem::with_id(app, "about", "About Tokcat", true, None::<&str>)?;
     let check_update = MenuItem::with_id(
@@ -27,7 +27,7 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Tokcat", true, Some("Cmd+Q"))?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Tokcat", true, Some(quit_accel()))?;
     let menu = Menu::with_items(
         app,
         &[
@@ -101,13 +101,43 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn settings_accel() -> &'static str {
+    "Cmd+,"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn settings_accel() -> &'static str {
+    "Ctrl+,"
+}
+
+#[cfg(target_os = "macos")]
+fn refresh_accel() -> &'static str {
+    "Cmd+R"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn refresh_accel() -> &'static str {
+    "Ctrl+R"
+}
+
+#[cfg(target_os = "macos")]
+fn quit_accel() -> &'static str {
+    "Cmd+Q"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn quit_accel() -> &'static str {
+    "Ctrl+Q"
+}
+
 /// Hide the popover and hand keyboard focus back to the app that was in front
 /// before it opened. Plain `w.hide()` (orderOut) leaves Tokcat the active
 /// accessory app with no window, so focus lands nowhere; `app.hide()` (NSApp
 /// hide) deactivates Tokcat and reactivates the previously-frontmost app. The
 /// `w.hide()` runs first so the toggle's `is_visible()` check is reliable
 /// regardless of how NSApp hide reports window visibility. Used by every
-/// explicit dismiss (Ctrl+Cmd+T, tray-click toggle, ⌘W, Esc) but not the
+/// explicit dismiss (global toggle, tray-click toggle, Ctrl+W, Esc) but not the
 /// blur-hide, where focus has already moved to whatever stole it.
 pub fn hide_popover<R: Runtime>(app: &AppHandle<R>) {
     if let Some(w) = app.get_webview_window("main") {
@@ -118,7 +148,7 @@ pub fn hide_popover<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// Show the popover under the tray if hidden, hide it if visible. Mirrors the
-/// left-click tray toggle so the global shortcut (Ctrl+Cmd+T) behaves the same.
+/// left-click tray toggle so the global shortcut behaves the same.
 pub fn toggle_popover<R: Runtime>(app: &AppHandle<R>) {
     if let Some(w) = app.get_webview_window("main") {
         if w.is_visible().unwrap_or(false) {

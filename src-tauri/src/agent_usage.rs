@@ -11,6 +11,7 @@ const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CLAUDE_REFRESH_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+#[cfg(target_os = "macos")]
 const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
 #[derive(Debug, Clone, Serialize)]
@@ -964,14 +965,20 @@ fn codex_home() -> PathBuf {
     std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
+        .or_else(|| home_dir().map(|home| home.join(".codex")))
         .unwrap_or_else(|| PathBuf::from(".codex"))
 }
 
 fn claude_credentials_path() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(|home| PathBuf::from(home).join(".claude/.credentials.json"))
+    home_dir()
+        .map(|home| home.join(".claude/.credentials.json"))
         .unwrap_or_else(|| PathBuf::from(".claude/.credentials.json"))
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 fn credentials_needs_refresh(last_refresh: Option<DateTime<Utc>>) -> bool {

@@ -41,7 +41,14 @@ function defaultYear(): string {
   return String(new Date().getFullYear())
 }
 
+function isMacPlatform(): boolean {
+  if (typeof navigator === 'undefined') return false
+  return /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+}
+
 export default function App() {
+  const macPlatform = useMemo(() => isMacPlatform(), [])
+  const shortcutPrefix = macPlatform ? '⌘' : 'Ctrl+'
   const [year, setYear] = useState<string>(defaultYear())
   const [refreshTick, setRefreshTick] = useState(0)
   const { payload, error } = useGraphStream(year)
@@ -59,10 +66,9 @@ export default function App() {
 
   const [aboutOpen, setAboutOpen] = useState(false)
   const [appVersion, setAppVersion] = useState('')
-  // True while the Cmd key is held — drives the translucent shortcut-hint pins
-  // overlaid on each actionable control (⌘R, ⌘,, ⌘1…, ⌘G).
-  const [cmdHeld, setCmdHeld] = useState(false)
-  // True while a manual refresh (button / ⌘R / tray) is in flight — spins the
+  // True while the platform shortcut key is held; drives translucent hint pins.
+  const [shortcutHeld, setShortcutHeld] = useState(false)
+  // True while a manual refresh (button / keyboard / tray) is in flight — spins the
   // header refresh icon so the fetch is visible even when it returns instantly.
   const [refreshing, setRefreshing] = useState(false)
 
@@ -156,7 +162,7 @@ export default function App() {
     return () => window.clearInterval(id)
   }, [])
 
-  // Manual refresh from the header button, ⌘R, or the tray menu — bypasses
+  // Manual refresh from the header button, keyboard shortcut, or the tray menu — bypasses
   // cache. Drives `refreshing` for the whole fetch so the header icon spins;
   // refresh_graph holds a ~450ms floor, so the spin is always visible.
   useEffect(() => {
@@ -200,9 +206,8 @@ export default function App() {
     if (!dashboardClients.includes(activeTab)) setActiveTab('overview')
   }, [activeTab, dashboardClients])
 
-  // Internal keyboard shortcuts. The global Ctrl+Cmd+T popover toggle is
-  // registered natively in Rust; everything here is cmd-only and cmd-exclusive
-  // (ctrl/alt/shift held → ignored) so it never collides with that global key.
+  // Internal keyboard shortcuts. Rust owns the global popover toggle; these
+  // platform-primary shortcuts stay scoped to the focused window.
   useEffect(() => {
     const tabs = ['overview', ...dashboardClients]
 
@@ -227,7 +232,8 @@ export default function App() {
         return
       }
 
-      if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+      const primaryModifier = macPlatform ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey
+      if (!primaryModifier || e.altKey || e.shiftKey) return
       const k = e.key.toLowerCase()
 
       if (k >= '1' && k <= '9') {
@@ -276,15 +282,16 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [dashboardClients, activeTab, settingsOpen, aboutOpen])
+  }, [dashboardClients, activeTab, settingsOpen, aboutOpen, macPlatform])
 
-  // Track the Cmd key for the shortcut-hint overlay. keyup can be missed if the
-  // app loses focus mid-hold (e.g. Cmd+Tab), so blur/visibilitychange force the
-  // pins off — otherwise they'd stay stuck after switching away.
+  // Track the platform shortcut key for the shortcut-hint overlay. keyup can be
+  // missed if the app loses focus mid-hold, so blur/visibilitychange force the
+  // pins off.
   useEffect(() => {
-    const onDown = (e: KeyboardEvent) => { if (e.key === 'Meta') setCmdHeld(true) }
-    const onUp = (e: KeyboardEvent) => { if (e.key === 'Meta') setCmdHeld(false) }
-    const reset = () => setCmdHeld(false)
+    const shortcutKey = macPlatform ? 'Meta' : 'Control'
+    const onDown = (e: KeyboardEvent) => { if (e.key === shortcutKey) setShortcutHeld(true) }
+    const onUp = (e: KeyboardEvent) => { if (e.key === shortcutKey) setShortcutHeld(false) }
+    const reset = () => setShortcutHeld(false)
     window.addEventListener('keydown', onDown)
     window.addEventListener('keyup', onUp)
     window.addEventListener('blur', reset)
@@ -295,7 +302,7 @@ export default function App() {
       window.removeEventListener('blur', reset)
       document.removeEventListener('visibilitychange', reset)
     }
-  }, [])
+  }, [macPlatform])
 
   const overviewClientSet = useMemo(() => new Set(presentClients), [presentClients])
   const activeClientIds = useMemo(
@@ -469,10 +476,17 @@ export default function App() {
                 onThemeChange={(t) => setTheme(t as ThemeName)}
                 onRefresh={() => setRefreshTick(t => t + 1)}
                 onOpenSettings={() => setSettingsOpen(true)}
-                kbdHints={cmdHeld}
+                kbdHints={shortcutHeld}
+                shortcutPrefix={shortcutPrefix}
                 refreshing={refreshing}
               />
-              <DashboardTabs clients={dashboardClients} active={activeTab} onChange={setActiveTab} kbdHints={cmdHeld} />
+              <DashboardTabs
+                clients={dashboardClients}
+                active={activeTab}
+                onChange={setActiveTab}
+                kbdHints={shortcutHeld}
+                shortcutPrefix={shortcutPrefix}
+              />
               {activeTab === 'overview' ? (
                 <div className="dashboard-stack">
                   <UsageBarGraph2D
@@ -487,7 +501,8 @@ export default function App() {
                     graphDark={palette.graphDark}
                     accent={mode.accent}
                     stats={overviewStats}
-                    kbdHints={cmdHeld}
+                    kbdHints={shortcutHeld}
+                    shortcutPrefix={shortcutPrefix}
                   />
                   <AgentLimitsCard clients={dashboardClients} trace={trace} agentUsage={agentUsage.payload} />
                   <UsageTraceCard
@@ -519,7 +534,8 @@ export default function App() {
                     graphDark={palette.graphDark}
                     accent={mode.accent}
                     stats={activeStats}
-                    kbdHints={cmdHeld}
+                    kbdHints={shortcutHeld}
+                    shortcutPrefix={shortcutPrefix}
                   />
                   <StreaksCard longest={activeStats.streaks.longest} current={activeStats.streaks.current} />
                 </div>
@@ -545,16 +561,16 @@ export default function App() {
             <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
               <div><strong>Tokcat</strong> — version {appVersion || 'unknown'}</div>
               <div style={{ marginTop: 8 }}>
-                Native macOS menubar dashboard for local AI token usage.
+                Native Windows tray dashboard for local AI token usage.
               </div>
               <div style={{ marginTop: 8 }}>
                 <a
-                  href="https://github.com/handlecusion/tokcat"
+                  href="https://github.com/handlecusion/tokcat-window"
                   target="_blank"
                   rel="noreferrer"
                   style={{ color: 'var(--blue)' }}
                 >
-                  github.com/handlecusion/tokcat
+                  github.com/handlecusion/tokcat-window
                 </a>
               </div>
             </div>

@@ -618,7 +618,7 @@ fn hermes_db_path() -> Option<PathBuf> {
             return Some(p);
         }
     }
-    let home = std::env::var_os("HOME")?;
+    let home = home_dir()?;
     let p = PathBuf::from(home).join(".hermes").join("state.db");
     if p.is_file() {
         Some(p)
@@ -629,7 +629,7 @@ fn hermes_db_path() -> Option<PathBuf> {
 
 fn roots() -> Vec<(PathBuf, ClientKind)> {
     let mut out = Vec::new();
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) = home_dir() {
         let home = PathBuf::from(home);
         let claude = home.join(".claude").join("projects");
         if claude.is_dir() {
@@ -641,6 +641,10 @@ fn roots() -> Vec<(PathBuf, ClientKind)> {
         }
     }
     out
+}
+
+fn home_dir() -> Option<std::ffi::OsString> {
+    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
 }
 
 fn system_time_to_ms(t: Option<SystemTime>) -> i64 {
