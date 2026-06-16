@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.1.30) — must match package.json / Cargo.toml / tauri.conf.json'
+        required: true
 
 permissions:
   contents: write
@@ -21,18 +26,35 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Extract version from tag
+      - name: Validate signing key is present
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$KEY" ]]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is not set. Generate a key with 'npx tauri signer generate' and add the private key to repository secrets."
+            exit 1
+          fi
+
+      - name: Extract version from tag or input
         id: meta
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+            TAG="v${VERSION}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+            TAG="${GITHUB_REF_NAME}"
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           PKG_VER=$(node -p "require('./package.json').version")
           CARGO_VER=$(grep -E '^version = ' src-tauri/Cargo.toml | head -1 | sed -E 's/version = "([^"]+)"/\1/')
           TAURI_VER=$(node -p "require('./src-tauri/tauri.conf.json').version")
           if [[ "$PKG_VER" != "$VERSION" || "$CARGO_VER" != "$VERSION" || "$TAURI_VER" != "$VERSION" ]]; then
-            echo "::error::version mismatch: tag=$VERSION package.json=$PKG_VER Cargo.toml=$CARGO_VER tauri.conf.json=$TAURI_VER"
+            echo "::error::version mismatch: expected=$VERSION package.json=$PKG_VER Cargo.toml=$CARGO_VER tauri.conf.json=$TAURI_VER"
             exit 1
           fi
 
@@ -61,7 +83,7 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ steps.meta.outputs.version }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.meta.outputs.tag }}
         run: |
           set -euo pipefail
           BUNDLE_DIR="src-tauri/target/release/bundle"
@@ -110,7 +132,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.meta.outputs.version }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.meta.outputs.tag }}
           INSTALLER: ${{ steps.latest.outputs.installer }}
           SIG_FILE: ${{ steps.latest.outputs.sig_file }}
           LATEST_JSON: ${{ steps.latest.outputs.latest_json }}
