@@ -186,6 +186,15 @@ html, body, #root {
   appearance: none;
 }
 
+/* The native dropdown list doesn't inherit the translucent control surface, so
+   without an explicit opaque background the options render light-on-light (dark
+   mode) or otherwise low-contrast. Pin an opaque background and matching text. */
+.year-select option,
+.theme-select option {
+  background-color: var(--card-solid);
+  color: var(--text);
+}
+
 .header-controls {
   display: flex;
   align-items: center;

@@ -226,6 +226,33 @@ fn position_window_under_tray<R: Runtime>(
     tray: &tauri::tray::TrayIcon<R>,
     window: &WebviewWindow<R>,
 ) -> tauri::Result<()> {
+    // On open, size to whatever height the window currently has — the content
+    // height the frontend last requested, or the configured default. The
+    // frontend's ResizeObserver then refines it via `set_popover_height`.
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let desired_h = window
+        .outer_size()
+        .ok()
+        .map(|size| size.height as f64 / scale)
+        .unwrap_or(POPOVER_DEFAULT_H);
+    place_popover(tray, window, desired_h)
+}
+
+/// Position and size the popover next to the tray icon.
+///
+/// Width is fixed at `POPOVER_W`. Height is `desired_h` clamped to the popover's
+/// supported range and to the vertical space available on the tray's monitor.
+///
+/// The popover is anchored to whichever screen edge the tray lives on. When the
+/// tray icon sits in the lower half of the monitor — a bottom Windows taskbar —
+/// the popover opens *above* the icon and grows upward, so a tall popover stays
+/// fully on screen instead of being pushed off the bottom. When the tray is at
+/// the top (macOS menu bar) it hangs below the icon and grows downward.
+pub fn place_popover<R: Runtime>(
+    tray: &tauri::tray::TrayIcon<R>,
+    window: &WebviewWindow<R>,
+    desired_h: f64,
+) -> tauri::Result<()> {
     let rect = match tray.rect()? {
         Some(r) => r,
         None => return Ok(()),
@@ -234,24 +261,19 @@ fn position_window_under_tray<R: Runtime>(
     let scale = window.scale_factor().unwrap_or(1.0);
     let pos: PhysicalPosition<f64> = rect.position.to_physical(scale);
     let size: PhysicalSize<f64> = rect.size.to_physical(scale);
-    let tray_x_logical = pos.x / scale;
-    let tray_y_logical = pos.y / scale;
-    let tray_w_logical = size.width / scale;
-    let tray_h_logical = size.height / scale;
+    let tray_x = pos.x / scale;
+    let tray_y = pos.y / scale;
+    let tray_w = size.width / scale;
+    let tray_h = size.height / scale;
 
-    // Center popover horizontally under the tray icon
-    let mut x = tray_x_logical + (tray_w_logical - POPOVER_W) / 2.0;
-    let y = tray_y_logical + tray_h_logical + POPOVER_TRAY_GAP;
-    let mut h = window
-        .outer_size()
-        .ok()
-        .map(|size| size.height as f64 / scale)
-        .unwrap_or(POPOVER_DEFAULT_H)
-        .clamp(POPOVER_MIN_H, POPOVER_MAX_H);
+    // Center the popover horizontally on the tray icon.
+    let mut x = tray_x + (tray_w - POPOVER_W) / 2.0;
+    let mut h = desired_h.clamp(POPOVER_MIN_H, POPOVER_MAX_H);
+    let mut tray_at_bottom = false;
 
     // Clamp to the monitor that owns the tray icon, not the monitor remembered
-    // by the hidden popover window from its last Space.
-    if let Ok(Some(monitor)) = window.monitor_from_point(tray_x_logical, tray_y_logical) {
+    // by the hidden popover window from its last position.
+    if let Ok(Some(monitor)) = window.monitor_from_point(tray_x, tray_y) {
         let m_pos = monitor.position();
         let m_size = monitor.size();
         let m_scale = monitor.scale_factor();
@@ -259,17 +281,46 @@ fn position_window_under_tray<R: Runtime>(
         let m_y = m_pos.y as f64 / m_scale;
         let m_w = m_size.width as f64 / m_scale;
         let m_h = m_size.height as f64 / m_scale;
-        let max_x = m_x + m_w - POPOVER_W - 8.0;
-        let min_x = m_x + 8.0;
-        if x > max_x {
-            x = max_x;
-        }
-        if x < min_x {
-            x = min_x;
-        }
-        let available_h = m_y + m_h - y - POPOVER_SCREEN_MARGIN;
+
+        tray_at_bottom = tray_y > m_y + m_h / 2.0;
+
+        x = x.clamp(
+            m_x + POPOVER_SCREEN_MARGIN,
+            m_x + m_w - POPOVER_W - POPOVER_SCREEN_MARGIN,
+        );
+
+        // Vertical room between the tray icon and the far edge of the monitor.
+        let available_h = if tray_at_bottom {
+            tray_y - POPOVER_TRAY_GAP - m_y - POPOVER_SCREEN_MARGIN
+        } else {
+            m_y + m_h - (tray_y + tray_h + POPOVER_TRAY_GAP) - POPOVER_SCREEN_MARGIN
+        };
         if available_h.is_finite() && available_h > 0.0 {
             h = h.min(available_h).max(POPOVER_MIN_H.min(available_h));
+        }
+    }
+
+    let y = if tray_at_bottom {
+        // Bottom-anchored: the popover's bottom edge sits just above the tray
+        // and any extra height extends upward toward the top of the screen.
+        tray_y - POPOVER_TRAY_GAP - h
+    } else {
+        tray_y + tray_h + POPOVER_TRAY_GAP
+    };
+
+    // No-op when we're already there, so a ResizeObserver-driven resize storm
+    // can't repeatedly reposition the window and fight itself.
+    if let (Ok(cur_pos), Ok(cur_size)) = (window.outer_position(), window.outer_size()) {
+        let cur_x = cur_pos.x as f64 / scale;
+        let cur_y = cur_pos.y as f64 / scale;
+        let cur_w = cur_size.width as f64 / scale;
+        let cur_h = cur_size.height as f64 / scale;
+        if (cur_w - POPOVER_W).abs() < 2.0
+            && (cur_h - h).abs() < 2.0
+            && (cur_x - x).abs() < 2.0
+            && (cur_y - y).abs() < 2.0
+        {
+            return Ok(());
         }
     }
 

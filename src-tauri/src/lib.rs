@@ -162,54 +162,20 @@ fn get_tokens_per_min(state: tauri::State<'_, Arc<AppState>>) -> f32 {
     state.tokens_per_min_estimate()
 }
 
-/// Resize the popover window so the trace card fits without trailing
-/// whitespace. Called from the frontend whenever the bucket count
-/// changes. Width is kept constant; height is clamped to the popover's
-/// supported range and the visible monitor area.
+/// Resize the popover so its content fits without trailing whitespace. Called
+/// from the frontend whenever the content height changes. The width stays fixed
+/// at `POPOVER_W`; the height is clamped to the popover's range and the room
+/// available on the tray's monitor, and the window is re-anchored to the tray
+/// so a taller popover grows toward the center of the screen rather than off it.
 #[tauri::command]
 fn set_popover_height(height: f64, window: tauri::Window) -> Result<(), String> {
-    let requested = height.clamp(tray::POPOVER_MIN_H, tray::POPOVER_MAX_H);
-    let h = clamp_popover_height_to_visible_area(&window, requested);
-    let current = window
-        .outer_size()
-        .map_err(|e| format!("outer_size: {}", e))?;
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let logical_w = (current.width as f64) / scale;
-    let logical_h = (current.height as f64) / scale;
-    // Idempotent: skip set_size for tiny diffs so a ResizeObserver storm
-    // doesn't fight itself (each set_size triggers another observe → invoke).
-    if (logical_h - h).abs() < 2.0 {
-        return Ok(());
+    let app = window.app_handle();
+    if let (Some(win), Some(tray)) =
+        (app.get_webview_window("main"), app.tray_by_id("main-tray"))
+    {
+        tray::place_popover(&tray, &win, height).map_err(|e| e.to_string())?;
     }
-    window
-        .set_size(tauri::LogicalSize::new(logical_w, h))
-        .map_err(|e| format!("set_size: {}", e))?;
     Ok(())
-}
-
-fn clamp_popover_height_to_visible_area(window: &tauri::Window, requested: f64) -> f64 {
-    let mut h = requested.clamp(tray::POPOVER_MIN_H, tray::POPOVER_MAX_H);
-    let Ok(position) = window.outer_position() else {
-        return h;
-    };
-    let Ok(Some(monitor)) = window.current_monitor() else {
-        return h;
-    };
-    let scale = monitor.scale_factor();
-    if !scale.is_finite() || scale <= 0.0 {
-        return h;
-    }
-
-    let monitor_pos = monitor.position();
-    let monitor_size = monitor.size();
-    let monitor_y = monitor_pos.y as f64 / scale;
-    let monitor_h = monitor_size.height as f64 / scale;
-    let y = position.y as f64 / scale;
-    let available_h = monitor_y + monitor_h - y - tray::POPOVER_SCREEN_MARGIN;
-    if available_h.is_finite() && available_h > 0.0 {
-        h = h.min(available_h).max(tray::POPOVER_MIN_H.min(available_h));
-    }
-    h
 }
 
 fn spawn_refresh_loop(app: tauri::AppHandle, state: Arc<AppState>) {
