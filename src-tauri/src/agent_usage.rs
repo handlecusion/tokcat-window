@@ -1001,8 +1001,26 @@ fn parse_datetime(value: &str) -> Option<DateTime<Utc>> {
 }
 
 fn claude_user_agent() -> String {
-    std::process::Command::new("claude")
-        .arg("--version")
+    // Computed at most once per process. Spawning `claude --version` on every
+    // refresh is wasteful and, on Windows, each spawn briefly flashes a console
+    // window that steals focus and dismisses the tray popover.
+    static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CACHE.get_or_init(compute_claude_user_agent).clone()
+}
+
+fn compute_claude_user_agent() -> String {
+    let mut command = std::process::Command::new("claude");
+    command.arg("--version");
+    // Suppress the conhost console window that Windows pops up when spawning the
+    // `claude` npm `.cmd` shim; without this the flash steals focus and the tray
+    // popover's blur-hide handler dismisses it mid-refresh.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
         .output()
         .ok()
         .and_then(|output| {
